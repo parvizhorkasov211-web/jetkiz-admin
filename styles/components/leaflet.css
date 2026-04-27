@@ -1,0 +1,17 @@
+.leaflet-container .leaflet-pane,
+.leaflet-container .leaflet-top,
+.leaflet-container .leaflet-bottom,
+.leaflet-container .leaflet-control {
+  z-index: 1 !important;
+}
+
+.leaflet-container .leaflet-popup-content-wrapper {
+  border-radius: var(--radius-md);
+  text-align: center;
+  background-color: var(--color-popover);
+}
+
+.leaflet-container .leaflet-popup-content {
+  font-family: inherit;
+  font-size: 12px;
+}
