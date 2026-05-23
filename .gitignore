@@ -10,8 +10,13 @@ build/
 dist/
 
 # local env
+.env
+.env.local
 .env*.local
 env.local
+
+# vercel
+.vercel
 
 # logs
 npm-debug.log*

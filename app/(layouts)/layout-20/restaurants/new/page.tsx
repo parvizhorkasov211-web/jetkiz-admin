@@ -1,7 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Phone, MapPin, Clock, Building2, Menu } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,9 @@ type CreateRestaurantPayload = {
   nameRu: string;
   nameKk: string;
   phone: string;
+  ownerPhone?: string;
+  ownerUserId?: string;
+  fromRestaurantId?: string;
   address: string | null;
   workingHours: string;
   status: 'OPEN' | 'CLOSED';
@@ -139,12 +142,49 @@ function extractErrorMessage(error: unknown): string {
 
 export default function NewRestaurantPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
-  const [form, setForm] = useState<FormState>(initialForm);
+  const mode = searchParams.get('mode') ?? '';
+  const ownerUserId = searchParams.get('ownerUserId') ?? '';
+  const fromRestaurantId = searchParams.get('fromRestaurantId') ?? '';
+
+  const phoneFromQuery =
+    searchParams.get('ownerPhone') ??
+    searchParams.get('phone') ??
+    searchParams.get('initialPhone') ??
+    '';
+
+  const phoneFromQueryFormatted = useMemo(
+    () => formatPhoneInput(phoneFromQuery),
+    [phoneFromQuery],
+  );
+
+  const isBranchMode = useMemo(() => {
+    return (
+      mode === 'branch' ||
+      Boolean(ownerUserId) ||
+      Boolean(fromRestaurantId) ||
+      Boolean(phoneFromQuery)
+    );
+  }, [mode, ownerUserId, fromRestaurantId, phoneFromQuery]);
+
+  const [form, setForm] = useState<FormState>(() => ({
+    ...initialForm,
+    phone: phoneFromQueryFormatted,
+  }));
   const [errors, setErrors] = useState<FieldErrors>({});
   const [loading, setLoading] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!phoneFromQueryFormatted) return;
+
+    setForm((prev) => ({
+      ...prev,
+      phone: phoneFromQueryFormatted,
+    }));
+  }, [phoneFromQueryFormatted]);
 
   const phoneIsComplete = useMemo(() => isPhoneComplete(form.phone), [form.phone]);
 
@@ -178,6 +218,10 @@ export default function NewRestaurantPage() {
   };
 
   const handlePhoneChange = (value: string) => {
+    if (isBranchMode && phoneFromQueryFormatted) {
+      return;
+    }
+
     const digits = extractPhoneDigits(value);
     if (digits.length > PHONE_DIGITS_LENGTH) return;
 
@@ -188,7 +232,7 @@ export default function NewRestaurantPage() {
     const nextErrors: FieldErrors = {};
 
     if (!form.phone.trim()) {
-      nextErrors.phone = 'Телефон обязателен';
+      nextErrors.phone = 'Телефон владельца обязателен';
     } else if (!phoneIsComplete) {
       nextErrors.phone = 'Номер должен содержать 11 цифр';
     }
@@ -213,8 +257,19 @@ export default function NewRestaurantPage() {
     return Object.keys(nextErrors).length === 0;
   };
 
+  const getClearedForm = (): FormState => {
+    if (isBranchMode && phoneFromQueryFormatted) {
+      return {
+        ...initialForm,
+        phone: phoneFromQueryFormatted,
+      };
+    }
+
+    return initialForm;
+  };
+
   const handleClear = () => {
-    setForm(initialForm);
+    setForm(getClearedForm());
     setErrors({});
     setPageError(null);
     setSuccessMessage(null);
@@ -230,23 +285,39 @@ export default function NewRestaurantPage() {
       setPageError(null);
       setSuccessMessage(null);
 
+      const normalizedPhone = normalizePhoneForSubmit(form.phone);
+
       const payload: CreateRestaurantPayload = {
         nameRu: form.nameRu.trim(),
         nameKk: form.nameKk.trim(),
-        phone: normalizePhoneForSubmit(form.phone),
+        phone: normalizedPhone,
         address: form.address.trim() || null,
         workingHours: `${form.openTime} - ${form.closeTime}`,
         status: form.status,
       };
 
-      await apiFetch('/restaurants', {
+      if (isBranchMode) {
+        payload.ownerPhone = normalizedPhone;
+
+        if (ownerUserId) {
+          payload.ownerUserId = ownerUserId;
+        }
+
+        if (fromRestaurantId) {
+          payload.fromRestaurantId = fromRestaurantId;
+        }
+      }
+
+      await apiFetch(isBranchMode ? '/restaurants/admin/branches' : '/restaurants', {
         method: 'POST',
         body: JSON.stringify(payload),
       });
 
-      setSuccessMessage('Ресторан успешно создан');
+      setSuccessMessage(
+        isBranchMode ? 'Филиал успешно создан' : 'Ресторан успешно создан',
+      );
 
-      setForm(initialForm);
+      setForm(getClearedForm());
       setErrors({});
 
       setTimeout(() => {
@@ -288,12 +359,21 @@ export default function NewRestaurantPage() {
         <div className="max-w-[560px] mx-auto">
           <div className="mb-8">
             <h2 className="text-2xl font-semibold text-gray-900 mb-2">
-              Создание ресторана
+              {isBranchMode ? 'Создание филиала' : 'Создание ресторана'}
             </h2>
             <p className="text-gray-600">
-              Введите данные ресторана и владельца
+              {isBranchMode
+                ? 'Номер владельца уже заполнен. Укажите данные нового филиала.'
+                : 'Введите данные ресторана и владельца'}
             </p>
           </div>
+
+          {isBranchMode && (
+            <div className="mb-6 rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-900">
+              Новый филиал будет привязан к владельцу с номером{' '}
+              <strong>{form.phone || phoneFromQueryFormatted || 'не указан'}</strong>.
+            </div>
+          )}
 
           {pageError && (
             <div className="mb-6 text-sm text-red-600 bg-red-50 p-3 rounded-lg border border-red-200">
@@ -322,11 +402,16 @@ export default function NewRestaurantPage() {
                     inputMode="numeric"
                     value={form.phone}
                     onChange={(e) => handlePhoneChange(e.target.value)}
+                    readOnly={isBranchMode && Boolean(phoneFromQueryFormatted)}
                     placeholder={PHONE_PLACEHOLDER}
                     className={`w-full bg-white text-gray-900 pl-11 pr-4 py-2.5 rounded-lg border ${
                       errors.phone
                         ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
                         : 'border-gray-300 focus:border-[#489F2A] focus:ring-[#489F2A]'
+                    } ${
+                      isBranchMode && phoneFromQueryFormatted
+                        ? 'cursor-not-allowed bg-gray-50 text-gray-700'
+                        : ''
                     } focus:outline-none focus:ring-2 focus:ring-opacity-20 transition-all placeholder:text-gray-400`}
                   />
                 </div>
@@ -336,7 +421,9 @@ export default function NewRestaurantPage() {
                 )}
 
                 <p className="text-gray-500 text-sm mt-1.5">
-                  Используется для входа владельца ресторана
+                  {isBranchMode
+                    ? 'Этот номер взят из выбранного ресторана и используется для владельца филиалов'
+                    : 'Используется для входа владельца ресторана'}
                 </p>
               </div>
 
@@ -349,7 +436,7 @@ export default function NewRestaurantPage() {
                   type="text"
                   value={form.nameRu}
                   onChange={(e) => setField('nameRu', e.target.value)}
-                  placeholder="Название на русском"
+                  placeholder={isBranchMode ? 'Например: Чайхана Филиал 2' : 'Название на русском'}
                   className={`w-full bg-white text-gray-900 px-4 py-2.5 rounded-lg border ${
                     errors.nameRu
                       ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
@@ -370,7 +457,7 @@ export default function NewRestaurantPage() {
                   type="text"
                   value={form.nameKk}
                   onChange={(e) => setField('nameKk', e.target.value)}
-                  placeholder="Название на казахском"
+                  placeholder={isBranchMode ? 'Например: Чайхана Филиал 2' : 'Название на казахском'}
                   className={`w-full bg-white text-gray-900 px-4 py-2.5 rounded-lg border ${
                     errors.nameKk
                       ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
@@ -478,7 +565,13 @@ export default function NewRestaurantPage() {
                   disabled={!isFormValid || loading}
                   className="flex-1 bg-[#489F2A] hover:bg-[#3a7f22] text-white"
                 >
-                  {loading ? 'Создание...' : 'Создать ресторан'}
+                  {loading
+                    ? isBranchMode
+                      ? 'Создание филиала...'
+                      : 'Создание...'
+                    : isBranchMode
+                      ? 'Создать филиал'
+                      : 'Создать ресторан'}
                 </Button>
 
                 <Button
@@ -502,8 +595,10 @@ export default function NewRestaurantPage() {
 
           <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
             <p className="text-sm text-blue-900">
-              <strong>Важно:</strong> После создания ресторана владелец сможет
-              войти в систему, используя указанный номер телефона.
+              <strong>Важно:</strong>{' '}
+              {isBranchMode
+                ? 'После создания филиал появится в списке ресторанов у этого владельца.'
+                : 'После создания ресторана владелец сможет войти в систему, используя указанный номер телефона.'}
             </p>
           </div>
         </div>

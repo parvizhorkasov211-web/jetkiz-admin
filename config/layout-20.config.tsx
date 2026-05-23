@@ -70,10 +70,25 @@ export const MENU_SIDEBAR_MAIN: MenuConfig = [
         icon: BarChart3,
       },
       {
-        title: "Метрики ресторанов",
-        path: `${L20}/restaurant-metrics`,
-        icon: TrendingUp,
-      },
+  title: "Метрики ресторанов",
+  path: `${L20}/restaurants/analytics`,
+  icon: TrendingUp,
+},
+{
+  title: "Аналитика товаров",
+  path: `${L20}/restaurants/analytics/products`,
+  icon: UtensilsCrossed,
+},
+{
+  title: "Качество ресторанов",
+  path: `${L20}/restaurants/analytics/quality`,
+  icon: FileCheck,
+},
+{
+  title: "Финансы ресторанов",
+  path: `${L20}/restaurants/analytics/finance`,
+  icon: Wallet,
+},
       {
         title: "Метрики клиентов",
         path: `${L20}/clients/metrics`,

@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
 
-export default function HomePage() {
-  redirect('/layout-20');
+export default function Page() {
+  redirect('/promo');
 }

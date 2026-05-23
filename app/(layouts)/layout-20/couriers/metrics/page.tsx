@@ -118,7 +118,7 @@ type TimelineResponse = {
 };
 
 type OnlineSeriesResponse = {
-  range: "day" | "week" | "month";
+  range: CourierMetricsPeriod;
   period: {
     from: string;
     to: string;
@@ -190,17 +190,9 @@ function formatIdle(minutes: number | null) {
   return `${h} ч. ${m} мин.`;
 }
 
-function getCourierId(item: any): string {
-  return String(
-    item?.courierUserId ??
-      item?.userId ??
-      item?.id ??
-      item?.courier?.userId ??
-      item?.user?.id ??
-      ""
-  ).trim();
+function getCourierId(item: CourierRealtimeItem): string {
+  return String(item.courierUserId ?? "").trim();
 }
-
 function getCourierStatus(item: CourierRealtimeItem) {
   if (item.blocked) return "Заблокирован";
   if (item.sleeping) return "Спящий";
@@ -996,10 +988,16 @@ export default function CourierMetricsPage() {
                         </Link>
 
                         <button
-                          onClick={() => {
-                            if (!courierId) return;
-                            setSelectedCourierId(courierId);
-                          }}
+  onClick={() => {
+    const id = getCourierId(item);
+
+    if (!id) {
+      console.warn("Courier ID missing in status-list item:", item);
+      return;
+    }
+
+    setSelectedCourierId(id);
+  }}
                           style={{
                             height: 34,
                             padding: "0 12px",
