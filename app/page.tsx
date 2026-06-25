@@ -1,5 +1,5 @@
-import PromoPage from './promo/page';
+import { RedesignedPublicHomePage } from '@/components/public/redesigned-home-page';
 
 export default function HomePage() {
-  return <PromoPage />;
+  return <RedesignedPublicHomePage locale="ru" />;
 }

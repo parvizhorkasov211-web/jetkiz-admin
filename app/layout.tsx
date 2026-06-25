@@ -7,12 +7,19 @@ import { Metadata } from 'next';
 import { ThemeProvider } from 'next-themes';
 
 import '@/styles/globals.css';
-const inter = Inter({ subsets: ['latin'] });
+const inter = Inter({ subsets: ['latin', 'cyrillic'] });
 
 export const metadata: Metadata = {
   title: {
-    template: '%s | Metronic',
-    default: 'Metronic', // a default is required when creating a template
+    template: '%s | JETKIZ',
+    default: 'JETKIZ — заказ и доставка еды в Щучинске',
+  },
+  description:
+    'JETKIZ — онлайн-платформа для заказа еды, доставки и самовывоза в Щучинске и Бурабайском районе.',
+  icons: {
+    icon: '/brand/jetkiz-logo.png',
+    shortcut: '/brand/jetkiz-logo.png',
+    apple: '/brand/jetkiz-logo.png',
   },
 };
 
@@ -25,7 +32,7 @@ export default async function RootLayout({
     <html className="h-full" suppressHydrationWarning>
       <body
         className={cn(
-          'antialiased flex h-full text-base text-foreground bg-background',
+          'antialiased flex h-full w-full text-base text-foreground bg-background',
           inter.className,
         )}
       >
