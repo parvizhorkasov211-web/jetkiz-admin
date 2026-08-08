@@ -14,7 +14,7 @@ export function Layout20({ children }: { children: React.ReactNode }) {
     <LayoutProvider
       style={
         {
-          "--sidebar-width": "220px",
+          "--sidebar-width": "260px",
           "--sidebar-collapsed-width": "70px",
           "--sidebar-header-height": "76px",
           "--header-height": "80px",
