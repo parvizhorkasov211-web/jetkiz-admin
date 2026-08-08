@@ -17,9 +17,7 @@ function getSetCookieHeaders(response: Response): string[] {
 
   if (typeof anyHeaders.getSetCookie === "function") {
     const cookies = anyHeaders.getSetCookie();
-    if (cookies.length > 0) {
-      return cookies;
-    }
+    if (cookies.length > 0) return cookies;
   }
 
   const raw = typeof anyHeaders.raw === "function" ? anyHeaders.raw() : null;
@@ -28,16 +26,11 @@ function getSetCookieHeaders(response: Response): string[] {
   }
 
   const single = response.headers.get("set-cookie");
-  if (!single) {
-    return [];
-  }
-
-  return splitCombinedSetCookieHeader(single);
+  return single ? splitCombinedSetCookieHeader(single) : [];
 }
 
 async function parseJsonSafe(response: Response) {
   const text = await response.text();
-
   try {
     return text ? JSON.parse(text) : null;
   } catch {
@@ -48,7 +41,6 @@ async function parseJsonSafe(response: Response) {
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => null);
-
     const phone = String(body?.phone ?? "").trim();
     const password = String(body?.password ?? "");
 
@@ -61,9 +53,7 @@ export async function POST(request: Request) {
 
     const backendResponse = await fetch(`${BACKEND_URL}/admin/auth/login`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ phone, password }),
       redirect: "manual",
       cache: "no-store",
@@ -71,17 +61,11 @@ export async function POST(request: Request) {
 
     const data = await parseJsonSafe(backendResponse);
 
-    console.log("admin login backend status:", backendResponse.status);
-    console.log("admin login backend set-cookie:", getSetCookieHeaders(backendResponse));
-
     if (!backendResponse.ok) {
       return NextResponse.json(
         {
           message:
-            data?.message ||
-            data?.error ||
-            data?.raw ||
-            "Admin login failed",
+            data?.message || data?.error || data?.raw || "Admin login failed",
         },
         { status: backendResponse.status || 401 },
       );
@@ -95,25 +79,18 @@ export async function POST(request: Request) {
     }
 
     const response = NextResponse.json(
-      {
-        success: true,
-        admin: data.admin,
-      },
+      { success: true, admin: data.admin },
       { status: 200 },
     );
 
-    const setCookies = getSetCookieHeaders(backendResponse);
-    for (const cookie of setCookies) {
+    for (const cookie of getSetCookieHeaders(backendResponse)) {
       response.headers.append("set-cookie", cookie);
     }
 
     return response;
   } catch (error) {
     return NextResponse.json(
-      {
-        message:
-          error instanceof Error ? error.message : "Internal server error",
-      },
+      { message: error instanceof Error ? error.message : "Internal server error" },
       { status: 500 },
     );
   }
@@ -122,14 +99,9 @@ export async function POST(request: Request) {
 export async function GET(request: NextRequest) {
   try {
     const cookieHeader = request.headers.get("cookie") || "";
-
     const backendResponse = await fetch(`${BACKEND_URL}/admin/auth/me`, {
       method: "GET",
-      headers: cookieHeader
-        ? {
-            cookie: cookieHeader,
-          }
-        : undefined,
+      headers: cookieHeader ? { cookie: cookieHeader } : undefined,
       cache: "no-store",
     });
 
@@ -141,20 +113,14 @@ export async function GET(request: NextRequest) {
           authenticated: false,
           admin: null,
           message:
-            data?.message ||
-            data?.error ||
-            data?.raw ||
-            "Unauthorized",
+            data?.message || data?.error || data?.raw || "Unauthorized",
         },
         { status: backendResponse.status || 401 },
       );
     }
 
     return NextResponse.json(
-      {
-        authenticated: true,
-        admin: data?.admin ?? data ?? null,
-      },
+      { authenticated: true, admin: data?.admin ?? data ?? null },
       { status: 200 },
     );
   } catch (error) {
@@ -162,8 +128,7 @@ export async function GET(request: NextRequest) {
       {
         authenticated: false,
         admin: null,
-        message:
-          error instanceof Error ? error.message : "Internal server error",
+        message: error instanceof Error ? error.message : "Internal server error",
       },
       { status: 500 },
     );
@@ -173,31 +138,20 @@ export async function GET(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const cookieHeader = request.headers.get("cookie") || "";
-
     const backendResponse = await fetch(`${BACKEND_URL}/admin/auth/logout`, {
       method: "POST",
-      headers: cookieHeader
-        ? {
-            cookie: cookieHeader,
-          }
-        : undefined,
+      headers: cookieHeader ? { cookie: cookieHeader } : undefined,
       cache: "no-store",
     });
 
     const response = NextResponse.json({ success: true }, { status: 200 });
-
-    const setCookies = getSetCookieHeaders(backendResponse);
-    for (const cookie of setCookies) {
+    for (const cookie of getSetCookieHeaders(backendResponse)) {
       response.headers.append("set-cookie", cookie);
     }
-
     return response;
   } catch (error) {
     return NextResponse.json(
-      {
-        message:
-          error instanceof Error ? error.message : "Internal server error",
-      },
+      { message: error instanceof Error ? error.message : "Internal server error" },
       { status: 500 },
     );
   }
