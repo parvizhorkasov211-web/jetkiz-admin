@@ -4,7 +4,6 @@ import {
   Bell,
   ChevronLeft,
   FileCheck,
-  FileText,
   Home,
   MapPin,
   MessageSquare,
@@ -25,7 +24,7 @@ export const MENU_SIDEBAR_MAIN: MenuConfig = [
   {
     children: [
       {
-        title: "Главная",
+        title: "Главная приложения",
         path: `${L20}`,
         icon: Home,
       },
@@ -34,128 +33,45 @@ export const MENU_SIDEBAR_MAIN: MenuConfig = [
   {
     title: "Операции",
     children: [
-      {
-        title: "Заказы",
-        path: `${L20}/orders`,
-        icon: ShoppingBag,
-      },
-      {
-        title: "Курьеры",
-        path: `${L20}/couriers`,
-        icon: Users,
-      },
-      {
-        title: "Рестораны",
-        path: `${L20}/restaurants`,
-        icon: UtensilsCrossed,
-      },
-      {
-        title: "Клиенты",
-        path: `${L20}/users`,
-        icon: Users,
-      },
-      {
-        title: "Карта курьеров",
-        path: `${L20}/couriers/map`,
-        icon: MapPin,
-      },
+      { title: "Заказы", path: `${L20}/orders`, icon: ShoppingBag },
+      { title: "Курьеры", path: `${L20}/couriers`, icon: Users },
+      { title: "Рестораны", path: `${L20}/restaurants`, icon: UtensilsCrossed },
+      { title: "Клиенты", path: `${L20}/users`, icon: Users },
+      { title: "Карта курьеров", path: `${L20}/couriers/map`, icon: MapPin },
     ],
   },
   {
     title: "Аналитика",
     children: [
-      {
-        title: "Метрики курьеров",
-        path: `${L20}/couriers/metrics`,
-        icon: BarChart3,
-      },
-      {
-  title: "Метрики ресторанов",
-  path: `${L20}/restaurants/analytics`,
-  icon: TrendingUp,
-},
-{
-  title: "Аналитика товаров",
-  path: `${L20}/restaurants/analytics/products`,
-  icon: UtensilsCrossed,
-},
-{
-  title: "Качество ресторанов",
-  path: `${L20}/restaurants/analytics/quality`,
-  icon: FileCheck,
-},
-{
-  title: "Финансы ресторанов",
-  path: `${L20}/restaurants/analytics/finance`,
-  icon: Wallet,
-},
-      {
-        title: "Метрики клиентов",
-        path: `${L20}/clients/metrics`,
-        icon: Users,
-      },
-      {
-        title: "Поиск и избранное",
-        path: `${L20}/clients/search-favorites`,
-        icon: Search,
-      },
-      {
-        title: "Финансы",
-        path: `${L20}/analytics`,
-        icon: Wallet,
-      },
+      { title: "Метрики курьеров", path: `${L20}/couriers/metrics`, icon: BarChart3 },
+      { title: "Метрики ресторанов", path: `${L20}/restaurants/analytics`, icon: TrendingUp },
+      { title: "Аналитика товаров", path: `${L20}/restaurants/analytics/products`, icon: UtensilsCrossed },
+      { title: "Качество ресторанов", path: `${L20}/restaurants/analytics/quality`, icon: FileCheck },
+      { title: "Финансы ресторанов", path: `${L20}/restaurants/analytics/finance`, icon: Wallet },
+      { title: "Метрики клиентов", path: `${L20}/clients/metrics`, icon: Users },
+      { title: "Поиск и избранное", path: `${L20}/clients/search-favorites`, icon: Search },
+      { title: "Финансы", path: `${L20}/analytics`, icon: Wallet },
     ],
   },
   {
     title: "Контент",
     children: [
-      {
-        title: "Промокоды",
-        path: `${L20}/promocodes`,
-        icon: Tag,
-      },
-      {
-        title: "Отзывы",
-        path: `${L20}/reviews`,
-        icon: MessageSquare,
-      },
-      {
-        title: "Уведомления",
-        path: `${L20}/notifications`,
-        icon: Bell,
-      },
-      {
-        title: "CMS",
-        path: `${L20}`,
-        icon: FileText,
-      },
+      { title: "Промокоды", path: `${L20}/promocodes`, icon: Tag },
+      { title: "Отзывы", path: `${L20}/reviews`, icon: MessageSquare },
+      { title: "Уведомления", path: `${L20}/notifications`, icon: Bell },
     ],
   },
   {
     title: "Управление",
     children: [
-      {
-        title: "Администраторы",
-        path: `${L20}/admins`,
-        icon: Shield,
-      },
-      {
-        title: "Настройки",
-        path: `${L20}/settings`,
-        icon: Settings,
-      },
-      {
-        title: "Журнал действий",
-        path: `${L20}/audit`,
-        icon: FileCheck,
-      },
+      { title: "Администраторы", path: `${L20}/admins`, icon: Shield },
+      { title: "Настройки", path: `${L20}/settings`, icon: Settings },
+      { title: "Журнал действий", path: `${L20}/audit`, icon: FileCheck },
     ],
   },
 ];
 
 export const MENU_SIDEBAR_WORKSPACES: MenuConfig = [];
 export const MENU_SIDEBAR_RESOURCES: MenuConfig = [];
-
 export const MENU_TOOLBAR: MenuConfig = [];
-
 export const SIDEBAR_COLLAPSE_ICON = ChevronLeft;
