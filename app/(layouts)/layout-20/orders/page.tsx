@@ -11,6 +11,7 @@ import {
   PackageSearch,
   RefreshCw,
   Search,
+  ShoppingBag,
   Store,
   XCircle,
 } from "lucide-react";
@@ -23,6 +24,10 @@ type OrderRow = {
   status: string;
   total: number;
   phone?: string | null;
+  deliveryType?: string | null;
+  fulfillmentType?: string | null;
+  orderType?: string | null;
+  isPickup?: boolean | null;
   restaurant?: { id: string; nameRu?: string | null; nameKk?: string | null };
   courier?: {
     userId?: string;
@@ -31,6 +36,12 @@ type OrderRow = {
     phone?: string | null;
   } | null;
 };
+
+function isPickupOrder(order: OrderRow) {
+  if (typeof order.isPickup === "boolean") return order.isPickup;
+  const type = (order.deliveryType ?? order.fulfillmentType ?? order.orderType ?? "").toUpperCase();
+  return ["PICKUP", "SELF_PICKUP", "TAKEAWAY", "SELF", "Самовывоз"].includes(type);
+}
 
 type StatusFilter = "ALL" | "ACTIVE" | "DELIVERED" | "CANCELLED";
 
@@ -205,17 +216,19 @@ export default function OrdersPage() {
           <div className="overflow-x-auto">
             <table className="w-full min-w-[980px] border-collapse">
               <thead><tr className="border-b border-slate-100 bg-slate-50/70 text-left text-[11px] font-bold uppercase tracking-[0.08em] text-slate-400">
-                <th className="px-5 py-3.5">Заказ</th><th className="px-4 py-3.5">Время</th><th className="px-4 py-3.5">Ресторан</th><th className="px-4 py-3.5">Курьер</th><th className="px-4 py-3.5">Статус</th><th className="px-4 py-3.5 text-right">Сумма</th><th className="w-14 px-4 py-3.5" />
+                <th className="px-5 py-3.5">Заказ</th><th className="px-4 py-3.5">Время</th><th className="px-4 py-3.5">Получение</th><th className="px-4 py-3.5">Ресторан</th><th className="px-4 py-3.5">Курьер</th><th className="px-4 py-3.5">Статус</th><th className="px-4 py-3.5 text-right">Сумма</th><th className="w-14 px-4 py-3.5" />
               </tr></thead>
               <tbody>
                 {filtered.map((order) => {
                   const date = formatOrderDate(order.createdAt);
                   const ui = statusUi(order.status);
+                  const pickup = isPickupOrder(order);
                   return <tr key={order.id} onClick={() => router.push(`/layout-20/orders/${order.id}`)} className="group cursor-pointer border-b border-slate-100 last:border-0 hover:bg-[#fffaf7]">
                     <td className="px-5 py-4"><div className="text-base font-black tracking-tight text-slate-950">{order.number != null ? `#${order.number}` : "Без номера"}</div>{order.phone && <div className="mt-0.5 text-xs text-slate-400">{order.phone}</div>}</td>
                     <td className="px-4 py-4"><div className="text-sm font-semibold text-slate-700">{date.time}</div><div className="text-xs text-slate-400">{date.day}</div></td>
+                    <td className="px-4 py-4"><span className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold ${pickup ? "bg-violet-50 text-violet-700" : "bg-blue-50 text-blue-700"}`}>{pickup ? <ShoppingBag className="h-3.5 w-3.5" /> : <Bike className="h-3.5 w-3.5" />}{pickup ? "Самовывоз" : "Доставка"}</span></td>
                     <td className="px-4 py-4"><div className="flex items-center gap-2.5"><span className="flex h-8 w-8 items-center justify-center rounded-lg bg-orange-50 text-orange-600"><Store className="h-4 w-4" /></span><span className="max-w-[220px] truncate text-sm font-semibold text-slate-800">{formatRestaurant(order)}</span></div></td>
-                    <td className="px-4 py-4"><div className="flex items-center gap-2.5"><span className={`flex h-8 w-8 items-center justify-center rounded-lg ${order.courier ? "bg-blue-50 text-blue-600" : "bg-slate-100 text-slate-400"}`}><Bike className="h-4 w-4" /></span><span className={`max-w-[190px] truncate text-sm font-medium ${order.courier ? "text-slate-700" : "text-slate-400"}`}>{formatCourier(order)}</span></div></td>
+                    <td className="px-4 py-4">{pickup ? <span className="text-sm font-medium text-slate-400">Не требуется</span> : <div className="flex items-center gap-2.5"><span className={`flex h-8 w-8 items-center justify-center rounded-lg ${order.courier ? "bg-blue-50 text-blue-600" : "bg-slate-100 text-slate-400"}`}><Bike className="h-4 w-4" /></span><span className={`max-w-[190px] truncate text-sm font-medium ${order.courier ? "text-slate-700" : "text-slate-400"}`}>{formatCourier(order)}</span></div>}</td>
                     <td className="px-4 py-4"><span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-bold ${ui.className}`}><span className={`h-1.5 w-1.5 rounded-full ${ui.dot}`} />{ui.label}</span></td>
                     <td className="px-4 py-4 text-right text-sm font-black text-slate-950">{formatMoney(order.total)}</td>
                     <td className="px-4 py-4"><ArrowRight className="h-4 w-4 text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-[#f05a2a]" /></td>
