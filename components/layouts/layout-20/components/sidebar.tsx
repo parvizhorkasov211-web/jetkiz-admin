@@ -9,7 +9,7 @@ export function Sidebar() {
     <aside
       className="fixed top-0 start-0 bottom-0 d-flex flex-column"
       style={{
-        width: 220,
+        width: 260,
         height: "100vh",
         background: "#0F172A",
         color: "#FFFFFF",
@@ -32,8 +32,8 @@ export function Sidebar() {
 
       <div
         style={{
-          padding: 16,
-          borderTop: "1px solid rgba(31,41,55,0.95)",
+          padding: 14,
+          borderTop: "1px solid rgba(148,163,184,0.14)",
         }}
       >
         <button
@@ -42,18 +42,19 @@ export function Sidebar() {
             width: "100%",
             height: 36,
             border: 0,
+            borderRadius: 8,
             background: "transparent",
-            color: "#9CA3AF",
+            color: "#94A3B8",
             display: "flex",
             alignItems: "center",
             gap: 8,
-            padding: "0 12px",
-            fontSize: 14,
-            fontWeight: 500,
+            padding: "0 10px",
+            fontSize: 13,
+            fontWeight: 600,
             cursor: "pointer",
           }}
         >
-          <ChevronLeft size={18} strokeWidth={2} />
+          <ChevronLeft size={17} strokeWidth={2} />
           <span>Свернуть меню</span>
         </button>
       </div>
