@@ -312,6 +312,7 @@ export default function OrderDetailsPage() {
   const canAssignCourier = useMemo(() => hasPermission(session, "orders.assign_courier"), [session]);
   const canForceStatus = useMemo(() => hasPermission(session, "orders.force_status"), [session]);
   const canReadCouriers = useMemo(() => hasPermission(session, "couriers.read"), [session]);
+  const canReadFinance = useMemo(() => hasPermission(session, "finance.read"), [session]);
 
   const isDelivery = order?.fulfillmentType !== "PICKUP";
   const canMutateCourier = Boolean(
@@ -374,12 +375,11 @@ export default function OrderDetailsPage() {
       } catch (cause) {
         if (seq !== requestSeq.current) return;
         setErr(cause instanceof Error ? cause.message : "Ошибка загрузки заказа");
-        if (!order) setOrder(null);
       } finally {
         if (seq === requestSeq.current) setLoading(false);
       }
     },
-    [id, order],
+    [id],
   );
 
   useEffect(() => {
@@ -499,7 +499,7 @@ export default function OrderDetailsPage() {
     );
   }
 
-  const timeline = Array.isArray(history?.timeline) ? history!.timeline! : [];
+  const timeline = Array.isArray(history?.timeline) ? history.timeline : [];
 
   return (
     <div className="p-6 bg-[#f5f7fb] min-h-screen">
@@ -551,10 +551,14 @@ export default function OrderDetailsPage() {
           <StatCard title="Оплата" value={paymentStatusLabel(order.paymentStatus)} subtitle={paymentMethodLabel(order.paymentMethod)} />
           <StatCard
             title="Курьеру NET"
-            value={isDelivery ? formatMoney(order.courierFee ?? 0) : "—"}
-            subtitle={isDelivery ? `Gross: ${formatMoney(order.courierFeeGross ?? 0)}` : "Для самовывоза курьер не используется"}
+            value={canReadFinance && isDelivery ? formatMoney(order.courierFee ?? 0) : "—"}
+            subtitle={!canReadFinance ? "Нет права finance.read" : isDelivery ? `Gross: ${formatMoney(order.courierFeeGross ?? 0)}` : "Для самовывоза курьер не используется"}
           />
-          <StatCard title="Ресторану" value={formatMoney(order.restaurantPayoutAmount ?? 0)} subtitle={`Комиссия: ${formatMoney(order.restaurantCommissionAmount ?? 0)}`} />
+          <StatCard
+            title="Ресторану"
+            value={canReadFinance ? formatMoney(order.restaurantPayoutAmount ?? 0) : "—"}
+            subtitle={canReadFinance ? `Комиссия: ${formatMoney(order.restaurantCommissionAmount ?? 0)}` : "Нет права finance.read"}
+          />
         </div>
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 mb-6">
@@ -712,7 +716,7 @@ export default function OrderDetailsPage() {
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 mb-6">
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 className="text-2xl font-bold text-slate-900 mb-5">Финансовый snapshot заказа</h2>
+            <h2 className="text-2xl font-bold text-slate-900 mb-5">Финансы заказа</h2>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {[
                 ["Subtotal", formatMoney(order.subtotal)],
@@ -720,13 +724,6 @@ export default function OrderDetailsPage() {
                 ["Скидка на товары", formatMoney(order.discountAmount ?? 0)],
                 ["Скидка на доставку", formatMoney(order.deliveryDiscountAmount ?? 0)],
                 ["Итого клиента", formatMoney(order.total)],
-                ["Courier gross", formatMoney(order.courierFeeGross ?? 0)],
-                ["Комиссия курьера", formatMoney(order.courierCommissionAmount ?? 0)],
-                ["Courier NET", formatMoney(order.courierFee ?? 0)],
-                ["Бонус курьера", formatMoney(order.courierBonusApplied ?? 0)],
-                ["Комиссия ресторана", formatMoney(order.restaurantCommissionAmount ?? 0)],
-                ["Выплата ресторану", formatMoney(order.restaurantPayoutAmount ?? 0)],
-                ["Pricing source", order.pricingSource || "—"],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-2xl bg-slate-50 p-4">
                   <div className="text-xs font-medium text-slate-500">{label}</div>
@@ -734,6 +731,29 @@ export default function OrderDetailsPage() {
                 </div>
               ))}
             </div>
+
+            {canReadFinance ? (
+              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                {[
+                  ["Courier gross", formatMoney(order.courierFeeGross ?? 0)],
+                  ["Комиссия курьера", formatMoney(order.courierCommissionAmount ?? 0)],
+                  ["Courier NET", formatMoney(order.courierFee ?? 0)],
+                  ["Бонус курьера", formatMoney(order.courierBonusApplied ?? 0)],
+                  ["Комиссия ресторана", formatMoney(order.restaurantCommissionAmount ?? 0)],
+                  ["Выплата ресторану", formatMoney(order.restaurantPayoutAmount ?? 0)],
+                  ["Pricing source", order.pricingSource || "—"],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-2xl bg-slate-50 p-4">
+                    <div className="text-xs font-medium text-slate-500">{label}</div>
+                    <div className="mt-1 text-sm font-bold text-slate-900">{value}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+                Комиссии и выплаты скрыты: нет права finance.read.
+              </div>
+            )}
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
