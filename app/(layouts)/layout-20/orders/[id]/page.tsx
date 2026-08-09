@@ -110,6 +110,26 @@ type CouriersListResponse = {
   total?: number;
 };
 
+type DispatchPreview = {
+  courier?: CourierShort | null;
+  courierUserId?: string | null;
+  userId?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  distanceKm?: number | null;
+  etaMinutes?: number | null;
+  score?: number | null;
+  reason?: string | null;
+};
+
+type ConfirmAction = {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  danger?: boolean;
+  run: () => Promise<void>;
+};
+
 type SessionResponse = {
   authenticated?: boolean;
   admin?: {
@@ -276,16 +296,14 @@ function addressText(address?: AddressDetails | null) {
   return address.address || address.title || "Адрес не указан";
 }
 
-function StatCard({ title, value, subtitle }: { title: string; value: string; subtitle: string }) {
-  return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm min-h-[132px] flex flex-col justify-between">
-      <div className="text-sm font-semibold text-slate-500">{title}</div>
-      <div>
-        <div className="text-3xl font-bold leading-none text-slate-950 mb-2">{value}</div>
-        <div className="text-sm text-slate-500">{subtitle}</div>
-      </div>
-    </div>
-  );
+function errorMessage(cause: unknown) {
+  const raw = cause instanceof Error ? cause.message : "Операция не выполнена";
+  const known: Record<string, string> = {
+    "API connection failed": "Нет связи с backend. Проверьте, что сервер запущен.",
+    Forbidden: "Недостаточно прав для этого действия.",
+    Unauthorized: "Сессия истекла. Войдите в админку заново.",
+  };
+  return known[raw] || raw;
 }
 
 export default function OrderDetailsPage() {
@@ -304,6 +322,10 @@ export default function OrderDetailsPage() {
   const [err, setErr] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [courierListError, setCourierListError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [preview, setPreview] = useState<DispatchPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
 
   const [selectedCourierUserId, setSelectedCourierUserId] = useState("");
   const [nextStatus, setNextStatus] = useState<CanonicalOrderStatus | "">("");
@@ -415,14 +437,17 @@ export default function OrderDetailsPage() {
     };
   }, [canReadCouriers, isDelivery]);
 
-  async function runMutation(action: () => Promise<unknown>) {
+  async function runMutation(action: () => Promise<unknown>, successMessage: string) {
     setMutating(true);
     setErr(null);
+    setSuccess(null);
     try {
       await action();
       await loadOrderAndHistory(false);
+      setSuccess(successMessage);
+      window.setTimeout(() => setSuccess(null), 4500);
     } catch (cause) {
-      setErr(cause instanceof Error ? cause.message : "Операция не выполнена");
+      setErr(errorMessage(cause));
       await loadOrderAndHistory(false).catch(() => undefined);
     } finally {
       setMutating(false);
@@ -431,12 +456,31 @@ export default function OrderDetailsPage() {
 
   async function assignCourier() {
     if (!selectedCourierUserId || !canMutateCourier || !canReadCouriers) return;
+    if (selectedCourierUserId === order?.courierId) {
+      setErr("Этот курьер уже назначен на заказ. Выберите другого курьера.");
+      return;
+    }
     await runMutation(() =>
       apiFetch(`/orders/${id}/assign-courier`, {
         method: "PATCH",
         body: JSON.stringify({ courierUserId: selectedCourierUserId }),
-      }),
+      }), "Курьер назначен",
     );
+  }
+
+  async function previewBestCourier() {
+    if (!canAutoAssign) return;
+    setPreviewLoading(true);
+    setErr(null);
+    try {
+      const data = await apiFetch<DispatchPreview>(`/dispatch/preview-best/${id}`);
+      setPreview(data);
+    } catch (cause) {
+      setErr(errorMessage(cause));
+      setPreview(null);
+    } finally {
+      setPreviewLoading(false);
+    }
   }
 
   async function autoAssign() {
@@ -445,15 +489,25 @@ export default function OrderDetailsPage() {
       apiFetch("/dispatch/assign-best", {
         method: "PATCH",
         body: JSON.stringify({ orderId: id, reason: "admin_order_page_auto_assign" }),
-      }),
+      }), "Лучший курьер назначен",
     );
+    setPreview(null);
   }
 
   async function unassign() {
     if (!order?.courierId || !canMutateCourier) return;
-    await runMutation(() =>
-      apiFetch(`/orders/${id}/unassign-courier`, { method: "PATCH" }),
-    );
+    setConfirmAction({
+      title: "Снять курьера?",
+      description: `Курьер ${formatCourier(order.courier)} будет снят с заказа.`,
+      confirmLabel: "Снять курьера",
+      danger: true,
+      run: async () => {
+        await runMutation(
+          () => apiFetch(`/orders/${id}/unassign-courier`, { method: "PATCH" }),
+          "Курьер снят с заказа",
+        );
+      },
+    });
   }
 
   async function forceStatus() {
@@ -464,14 +518,24 @@ export default function OrderDetailsPage() {
       return;
     }
 
-    await runMutation(() =>
-      apiFetch(`/orders/${id}/status`, {
-        method: "PATCH",
-        body: JSON.stringify({ status: nextStatus, reason }),
-      }),
-    );
-    setNextStatus("");
-    setStatusReason("");
+    const targetStatus = nextStatus;
+    setConfirmAction({
+      title: `Изменить статус на «${statusLabel(targetStatus)}»?`,
+      description: `Причина: ${reason}. Действие сохранится в журнале аудита.`,
+      confirmLabel: targetStatus === "CANCELED" || targetStatus === "REJECTED" ? "Подтвердить отмену" : "Изменить статус",
+      danger: targetStatus === "CANCELED" || targetStatus === "REJECTED",
+      run: async () => {
+        await runMutation(
+          () => apiFetch(`/orders/${id}/status`, {
+            method: "PATCH",
+            body: JSON.stringify({ status: targetStatus, reason }),
+          }),
+          `Статус изменён на «${statusLabel(targetStatus)}»`,
+        );
+        setNextStatus("");
+        setStatusReason("");
+      },
+    });
   }
 
   if (loading && !order) {
@@ -500,314 +564,113 @@ export default function OrderDetailsPage() {
   }
 
   const timeline = Array.isArray(history?.timeline) ? history.timeline : [];
+  const currentCourierId = order.courierId || order.courier?.userId || "";
+  const previewCourier = preview?.courier ?? (preview ? {
+    userId: preview.courierUserId || preview.userId || "",
+    firstName: preview.firstName,
+    lastName: preview.lastName,
+  } : null);
+  const courierDisabledReason = !canAssignCourier
+    ? "Нет права на назначение курьеров"
+    : !isDelivery
+      ? "Для самовывоза курьер не нужен"
+      : !ASSIGNABLE_STATUSES.has(order.status.toUpperCase())
+        ? `В статусе «${statusLabel(order.status)}» менять курьера нельзя`
+        : null;
 
   return (
-    <div className="p-6 bg-[#f5f7fb] min-h-screen">
-      <div className="max-w-none">
-        <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div>
-            <button
-              className="mb-4 inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-              onClick={() => router.back()}
-            >
-              ← Назад
-            </button>
-            <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-4xl font-bold tracking-tight text-slate-900">
-                Заказ {order.number != null ? `#${order.number}` : ""}
-              </h1>
-              <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold ${statusUi.pill}`}>
-                <span className={`h-2 w-2 rounded-full ${statusUi.dot}`} />
-                {statusUi.label}
-              </span>
-              <span className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">
-                {order.fulfillmentType === "PICKUP" ? "Самовывоз" : "Доставка"}
-              </span>
+    <div className="min-h-screen bg-[#f5f7fb] p-4 lg:p-5">
+      <div className="mx-auto max-w-[1500px]">
+        <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <button onClick={() => router.back()} className="grid h-10 w-10 place-items-center rounded-xl border border-slate-200 bg-white text-lg text-slate-700 shadow-sm hover:bg-slate-50" aria-label="Назад">←</button>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-2xl font-bold tracking-tight text-slate-950">Заказ {order.number != null ? `#${order.number}` : ""}</h1>
+                <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${statusUi.pill}`}><span className={`h-1.5 w-1.5 rounded-full ${statusUi.dot}`} />{statusUi.label}</span>
+                <span className="rounded-full bg-slate-200/70 px-2.5 py-1 text-xs font-semibold text-slate-700">{isDelivery ? "Доставка" : "Самовывоз"}</span>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">Создан {formatDate(order.createdAt)} · автообновление каждые 10 секунд</p>
             </div>
-            <p className="mt-2 text-sm text-slate-500 break-all">{order.id}</p>
           </div>
+          <button disabled={mutating} onClick={() => void loadOrderAndHistory(false)} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50">{mutating ? "Выполняется…" : "Обновить данные"}</button>
+        </header>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-              <div className="text-xs font-medium text-slate-500">Создан</div>
-              <div className="text-sm font-bold text-slate-900">{formatDate(order.createdAt)}</div>
-            </div>
-            <button
-              disabled={mutating}
-              onClick={() => void loadOrderAndHistory(false)}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-800 disabled:opacity-50"
-            >
-              Обновить
-            </button>
-          </div>
+        {err ? <div className="mb-4 flex items-start justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700"><span>{err}</span><button onClick={() => setErr(null)} aria-label="Закрыть">×</button></div> : null}
+        {success ? <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">✓ {success}</div> : null}
+
+        <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[
+            ["Сумма заказа", formatMoney(order.total), `Товары ${formatMoney(order.subtotal)}`],
+            ["Оплата", paymentStatusLabel(order.paymentStatus), paymentMethodLabel(order.paymentMethod)],
+            ["Курьеру", canReadFinance && isDelivery ? formatMoney(order.courierFee ?? 0) : "—", isDelivery ? "После комиссии" : "Не используется"],
+            ["Ресторану", canReadFinance ? formatMoney(order.restaurantPayoutAmount ?? 0) : "—", canReadFinance ? `Комиссия ${formatMoney(order.restaurantCommissionAmount ?? 0)}` : "Данные скрыты"],
+          ].map(([label, value, note]) => <div key={label} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm"><div className="text-xs font-medium text-slate-500">{label}</div><div className="mt-1 text-xl font-bold text-slate-950">{value}</div><div className="mt-0.5 text-xs text-slate-500">{note}</div></div>)}
         </div>
 
-        {err ? (
-          <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4 text-sm text-rose-700">{err}</div>
-        ) : null}
+        <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(380px,.75fr)]">
+          <main className="space-y-4">
+            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="border-b border-slate-100 px-5 py-3.5"><h2 className="font-bold text-slate-950">Состав заказа</h2></div>
+              <div className="divide-y divide-slate-100">
+                {(order.items || []).map((item) => <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-center gap-4 px-5 py-3 text-sm"><div className="font-semibold text-slate-900">{item.title}</div><div className="text-slate-500">{item.quantity} × {formatMoney(item.price)}</div><div className="min-w-24 text-right font-bold text-slate-950">{formatMoney(item.price * item.quantity)}</div></div>)}
+                {!order.items?.length ? <div className="px-5 py-8 text-center text-sm text-slate-500">Позиции не найдены</div> : null}
+              </div>
+              <div className="flex justify-end border-t border-slate-100 bg-slate-50/60 px-5 py-3 text-sm"><span className="mr-6 text-slate-500">Итого</span><strong className="min-w-24 text-right text-base">{formatMoney(order.total)}</strong></div>
+            </section>
 
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4 mb-6">
-          <StatCard title="Итого" value={formatMoney(order.total)} subtitle={`Subtotal: ${formatMoney(order.subtotal)}`} />
-          <StatCard title="Оплата" value={paymentStatusLabel(order.paymentStatus)} subtitle={paymentMethodLabel(order.paymentMethod)} />
-          <StatCard
-            title="Курьеру NET"
-            value={canReadFinance && isDelivery ? formatMoney(order.courierFee ?? 0) : "—"}
-            subtitle={!canReadFinance ? "Нет права finance.read" : isDelivery ? `Gross: ${formatMoney(order.courierFeeGross ?? 0)}` : "Для самовывоза курьер не используется"}
-          />
-          <StatCard
-            title="Ресторану"
-            value={canReadFinance ? formatMoney(order.restaurantPayoutAmount ?? 0) : "—"}
-            subtitle={canReadFinance ? `Комиссия: ${formatMoney(order.restaurantCommissionAmount ?? 0)}` : "Нет права finance.read"}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 mb-6">
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 className="text-2xl font-bold text-slate-900 mb-5">Доставка / самовывоз</h2>
-            {isDelivery ? (
-              <div className="space-y-3 text-sm">
-                <div><span className="text-slate-500">Адрес:</span> <span className="font-bold text-slate-900">{addressText(order.address)}</span></div>
-                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                  <div className="rounded-xl bg-slate-50 p-3"><div className="text-xs text-slate-500">Подъезд</div><div className="font-bold">{order.address?.entrance || "—"}</div></div>
-                  <div className="rounded-xl bg-slate-50 p-3"><div className="text-xs text-slate-500">Этаж</div><div className="font-bold">{order.address?.floor || "—"}</div></div>
-                  <div className="rounded-xl bg-slate-50 p-3"><div className="text-xs text-slate-500">Дверь</div><div className="font-bold">{order.address?.door || "—"}</div></div>
-                  <div className="rounded-xl bg-slate-50 p-3"><div className="text-xs text-slate-500">Домофон</div><div className="font-bold">{order.address?.intercom || "—"}</div></div>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h2 className="mb-4 font-bold text-slate-950">Клиент и ресторан</h2>
+                <div className="space-y-3 text-sm">
+                  <div><div className="text-xs text-slate-500">Клиент</div><div className="font-semibold">{`${order.user?.firstName ?? ""} ${order.user?.lastName ?? ""}`.trim() || "Имя не указано"}</div></div>
+                  <div><div className="text-xs text-slate-500">Телефон</div><div className="font-semibold">{order.phone || order.user?.phone || "—"}</div></div>
+                  <div><div className="text-xs text-slate-500">Ресторан</div><div className="font-semibold">{order.restaurant?.nameRu || order.restaurant?.nameKk || "—"}</div><div className="text-xs text-slate-500">{order.restaurant?.phone || ""}</div></div>
+                  <div><div className="text-xs text-slate-500">Комментарий</div><div className="whitespace-pre-wrap font-medium">{order.comment || "Нет комментария"}</div></div>
                 </div>
-                <div><span className="text-slate-500">Контакт:</span> <span className="font-semibold">{order.address?.contactPhone || order.phone || "—"}</span></div>
-                <div><span className="text-slate-500">Комментарий к адресу:</span> <span className="font-semibold">{order.address?.comment || "—"}</span></div>
-              </div>
-            ) : (
-              <div className="space-y-3 text-sm">
-                <div className="rounded-2xl bg-blue-50 p-4 text-blue-800 font-semibold">
-                  Самовывоз: назначение и dispatch курьера отключены.
-                </div>
-                <div><span className="text-slate-500">Ресторан:</span> <span className="font-bold">{order.restaurant?.nameRu || order.restaurant?.nameKk || "—"}</span></div>
-                <div><span className="text-slate-500">Адрес ресторана:</span> <span className="font-semibold">{order.restaurant?.address || "—"}</span></div>
-                <div><span className="text-slate-500">Телефон ресторана:</span> <span className="font-semibold">{order.restaurant?.phone || "—"}</span></div>
-              </div>
-            )}
-          </div>
+              </section>
 
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 className="text-2xl font-bold text-slate-900 mb-5">Основная информация</h2>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div className="rounded-2xl bg-slate-50 p-4"><div className="text-xs text-slate-500">Клиент</div><div className="mt-1 text-sm font-bold">{`${order.user?.firstName ?? ""} ${order.user?.lastName ?? ""}`.trim() || "—"}</div></div>
-              <div className="rounded-2xl bg-slate-50 p-4"><div className="text-xs text-slate-500">Телефон</div><div className="mt-1 text-sm font-bold">{order.phone || order.user?.phone || "—"}</div></div>
-              <div className="rounded-2xl bg-slate-50 p-4"><div className="text-xs text-slate-500">Ресторан</div><div className="mt-1 text-sm font-bold">{order.restaurant?.nameRu || order.restaurant?.nameKk || "—"}</div></div>
-              <div className="rounded-2xl bg-slate-50 p-4"><div className="text-xs text-slate-500">Оставить у двери</div><div className="mt-1 text-sm font-bold">{order.leaveAtDoor ? "Да" : "Нет"}</div></div>
-              <div className="rounded-2xl bg-slate-50 p-4 md:col-span-2"><div className="text-xs text-slate-500">Комментарий</div><div className="mt-1 text-sm font-bold whitespace-pre-wrap">{order.comment || "—"}</div></div>
-              <div className="rounded-2xl bg-slate-50 p-4 md:col-span-2"><div className="text-xs text-slate-500">Обещанное время</div><div className="mt-1 text-sm font-bold">{formatDate(order.promisedAt)}</div></div>
-            </div>
-          </div>
-        </div>
-
-        {isDelivery ? (
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm mb-6">
-            <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 className="text-2xl font-bold text-slate-900">Курьер</h2>
-                <p className="mt-1 text-sm text-slate-500">Назначение разрешено только для ACCEPTED / COOKING / READY</p>
-              </div>
-              <div className={`rounded-full px-3 py-2 text-xs font-semibold ${order.courier?.isOnline ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-                {order.courier ? (order.courier.isOnline ? "Онлайн" : "Офлайн") : "Не назначен"}
-              </div>
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h2 className="mb-4 font-bold text-slate-950">{isDelivery ? "Адрес доставки" : "Получение в ресторане"}</h2>
+                {isDelivery ? <div className="space-y-3 text-sm"><div className="font-semibold text-slate-950">{addressText(order.address)}</div><div className="grid grid-cols-4 gap-2">{[["Подъезд", order.address?.entrance], ["Этаж", order.address?.floor], ["Дверь", order.address?.door], ["Домофон", order.address?.intercom]].map(([label, value]) => <div key={label} className="rounded-lg bg-slate-50 p-2"><div className="text-[11px] text-slate-500">{label}</div><div className="font-semibold">{value || "—"}</div></div>)}</div><div><span className="text-slate-500">Контакт: </span><span className="font-semibold">{order.address?.contactPhone || order.phone || "—"}</span></div><div><span className="text-slate-500">У двери: </span><span className="font-semibold">{order.leaveAtDoor ? "Да" : "Нет"}</span></div><div className="text-slate-600">{order.address?.comment || "Без комментария к адресу"}</div></div> : <div className="space-y-2 text-sm"><div className="font-semibold">{order.restaurant?.nameRu || order.restaurant?.nameKk || "—"}</div><div>{order.restaurant?.address || "Адрес не указан"}</div><div>{order.restaurant?.phone || "Телефон не указан"}</div><div className="rounded-lg bg-blue-50 p-3 text-blue-700">Курьер для самовывоза не назначается.</div></div>}
+              </section>
             </div>
 
-            <div className="rounded-2xl bg-slate-50 p-5 mb-5">
-              <div className="text-xs font-medium text-slate-500 mb-1">Текущий курьер</div>
-              <div className="text-xl font-bold text-slate-900">{formatCourier(order.courier)}</div>
-              <div className="mt-2 text-sm text-slate-500">Назначен: {formatDate(order.assignedAt)}</div>
-            </div>
-
-            {!canAssignCourier ? (
-              <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">Нет права orders.assign_courier.</div>
-            ) : !ASSIGNABLE_STATUSES.has(order.status.toUpperCase()) ? (
-              <div className="rounded-2xl bg-amber-50 p-4 text-sm font-semibold text-amber-800">В текущем статусе менять курьера нельзя.</div>
-            ) : (
-              <div className="space-y-4">
-                {canReadCouriers ? (
-                  <label className="block">
-                    <span className="mb-2 block text-sm font-semibold text-slate-700">Выбрать активного курьера</span>
-                    <select
-                      value={selectedCourierUserId}
-                      onChange={(event) => setSelectedCourierUserId(event.target.value)}
-                      disabled={mutating}
-                      className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none"
-                    >
-                      <option value="">— выбрать курьера —</option>
-                      {couriers.map((courier) => (
-                        <option key={courier.userId} value={courier.userId}>
-                          {`${courier.isOnline ? "Онлайн" : "Офлайн"} · ${formatCourier(courier)}`}
-                        </option>
-                      ))}
-                    </select>
-                    {courierListError ? <div className="mt-2 text-xs text-rose-600">{courierListError}</div> : null}
-                  </label>
-                ) : (
-                  <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">Ручной выбор скрыт: нет права couriers.read. Автоназначение может оставаться доступным.</div>
-                )}
-
-                <div className="flex flex-wrap gap-3">
-                  {canReadCouriers ? (
-                    <button
-                      disabled={mutating || !selectedCourierUserId || !canMutateCourier}
-                      onClick={() => void assignCourier()}
-                      className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white disabled:opacity-40"
-                    >
-                      Назначить
-                    </button>
-                  ) : null}
-                  <button
-                    disabled={mutating || !canAutoAssign}
-                    onClick={() => void autoAssign()}
-                    className="rounded-2xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white disabled:opacity-40"
-                  >
-                    Автоназначить лучшего
-                  </button>
-                  <button
-                    disabled={mutating || !order.courierId || !canMutateCourier}
-                    onClick={() => void unassign()}
-                    className="rounded-2xl border border-rose-200 bg-rose-50 px-5 py-3 text-sm font-semibold text-rose-700 disabled:opacity-40"
-                  >
-                    Снять курьера
-                  </button>
-                </div>
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-center justify-between"><h2 className="font-bold text-slate-950">Расчёт заказа</h2><span className="text-xs text-slate-500">{order.pricingSource ? "Расчёт зафиксирован системой" : "Стандартный расчёт"}</span></div>
+              <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm lg:grid-cols-3">
+                {[["Товары", formatMoney(order.subtotal)], ["Доставка", formatMoney(order.deliveryFee)], ["Скидка на товары", `− ${formatMoney(order.discountAmount ?? 0)}`], ["Скидка на доставку", `− ${formatMoney(order.deliveryDiscountAmount ?? 0)}`], ["Итого клиенту", formatMoney(order.total)]].map(([label, value]) => <div key={label} className="flex justify-between gap-3 border-b border-slate-100 py-2"><span className="text-slate-500">{label}</span><strong>{value}</strong></div>)}
+                {canReadFinance ? <>{[["Начислено курьеру", formatMoney(order.courierFeeGross ?? 0)], ["Комиссия с курьера", formatMoney(order.courierCommissionAmount ?? 0)], ["К выплате курьеру", formatMoney(order.courierFee ?? 0)], ["Бонус курьеру", formatMoney(order.courierBonusApplied ?? 0)], ["Комиссия с ресторана", formatMoney(order.restaurantCommissionAmount ?? 0)], ["К выплате ресторану", formatMoney(order.restaurantPayoutAmount ?? 0)]].map(([label, value]) => <div key={label} className="flex justify-between gap-3 border-b border-slate-100 py-2"><span className="text-slate-500">{label}</span><strong>{value}</strong></div>)}</> : null}
               </div>
-            )}
-          </div>
-        ) : null}
+            </section>
+          </main>
 
-        {canForceStatus && allowedStatuses.length > 0 ? (
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm mb-6">
-            <h2 className="text-2xl font-bold text-slate-900 mb-2">Изменить статус администратором</h2>
-            <p className="text-sm text-slate-500 mb-5">Backend сохранит причину, администратора, IP, request ID и историю изменения.</p>
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_1fr_auto] lg:items-end">
-              <label>
-                <span className="mb-2 block text-sm font-semibold text-slate-700">Новый статус</span>
-                <select
-                  value={nextStatus}
-                  onChange={(event) => setNextStatus(event.target.value as CanonicalOrderStatus | "")}
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
-                >
-                  <option value="">— выбрать —</option>
-                  {allowedStatuses.map((candidate) => <option key={candidate} value={candidate}>{statusLabel(candidate)}</option>)}
-                </select>
-              </label>
-              <label>
-                <span className="mb-2 block text-sm font-semibold text-slate-700">Причина (обязательно)</span>
-                <input
-                  value={statusReason}
-                  maxLength={500}
-                  onChange={(event) => setStatusReason(event.target.value)}
-                  placeholder="Например: отмена по обращению клиента"
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
-                />
-              </label>
-              <button
-                disabled={mutating || !nextStatus || statusReason.trim().length < 3}
-                onClick={() => void forceStatus()}
-                className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white disabled:opacity-40"
-              >
-                Применить
-              </button>
-            </div>
-          </div>
-        ) : null}
+          <aside className="space-y-4 xl:sticky xl:top-4">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="mb-1 font-bold text-slate-950">Управление заказом</h2>
+              <p className="mb-4 text-xs text-slate-500">Каждое действие записывается в историю</p>
+              {canForceStatus && allowedStatuses.length > 0 ? <div className="space-y-3"><div className="grid grid-cols-2 gap-2">{allowedStatuses.map((candidate) => <button key={candidate} onClick={() => setNextStatus(candidate)} className={`rounded-xl border px-3 py-2.5 text-sm font-semibold transition ${nextStatus === candidate ? candidate === "CANCELED" || candidate === "REJECTED" ? "border-rose-500 bg-rose-50 text-rose-700" : "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}>{statusLabel(candidate)}</button>)}</div><textarea value={statusReason} maxLength={500} rows={2} onChange={(event) => setStatusReason(event.target.value)} placeholder="Причина изменения статуса — обязательно" className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-slate-400" /><button disabled={mutating || !nextStatus || statusReason.trim().length < 3} onClick={() => void forceStatus()} className="w-full rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">Применить изменение</button></div> : <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-600">{!canForceStatus ? "Нет права на изменение статуса" : "Заказ находится в конечном статусе"}</div>}
+            </section>
 
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 mb-6">
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 className="text-2xl font-bold text-slate-900 mb-5">Финансы заказа</h2>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              {[
-                ["Subtotal", formatMoney(order.subtotal)],
-                ["Доставка клиенту", formatMoney(order.deliveryFee)],
-                ["Скидка на товары", formatMoney(order.discountAmount ?? 0)],
-                ["Скидка на доставку", formatMoney(order.deliveryDiscountAmount ?? 0)],
-                ["Итого клиента", formatMoney(order.total)],
-              ].map(([label, value]) => (
-                <div key={label} className="rounded-2xl bg-slate-50 p-4">
-                  <div className="text-xs font-medium text-slate-500">{label}</div>
-                  <div className="mt-1 text-sm font-bold text-slate-900">{value}</div>
-                </div>
-              ))}
-            </div>
+            {isDelivery ? <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-3 flex items-center justify-between"><h2 className="font-bold text-slate-950">Курьер</h2><span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${order.courier?.isOnline ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{order.courier ? order.courier.isOnline ? "Онлайн" : "Офлайн" : "Не назначен"}</span></div>
+              <div className="mb-3 rounded-xl bg-slate-50 p-3"><div className="text-xs text-slate-500">Текущий курьер</div><div className="mt-0.5 font-semibold text-slate-950">{formatCourier(order.courier)}</div>{order.assignedAt ? <div className="mt-1 text-xs text-slate-500">Назначен {formatDate(order.assignedAt)}</div> : null}</div>
+              {courierDisabledReason ? <div className="rounded-xl bg-amber-50 p-3 text-xs font-medium text-amber-800">{courierDisabledReason}</div> : <div className="space-y-2.5">{canReadCouriers ? <><select value={selectedCourierUserId} onChange={(event) => { setSelectedCourierUserId(event.target.value); setErr(null); }} disabled={mutating} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm"><option value="">Выберите курьера</option>{couriers.map((courier) => <option key={courier.userId} value={courier.userId}>{courier.isOnline ? "● Онлайн" : "○ Офлайн"} · {formatCourier(courier)}</option>)}</select><button disabled={mutating || !selectedCourierUserId || selectedCourierUserId === currentCourierId} onClick={() => void assignCourier()} className="w-full rounded-xl bg-slate-950 px-3 py-2.5 text-sm font-semibold text-white disabled:opacity-40">{selectedCourierUserId === currentCourierId ? "Этот курьер уже назначен" : currentCourierId ? "Заменить курьера" : "Назначить выбранного"}</button></> : <div className="text-xs text-slate-500">Список курьеров скрыт из-за прав доступа.</div>}{courierListError ? <div className="text-xs text-rose-600">{courierListError}</div> : null}
+                {!order.courierId && order.status.toUpperCase() === "READY" ? <><button disabled={mutating || previewLoading} onClick={() => void previewBestCourier()} className="w-full rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm font-semibold text-blue-700 disabled:opacity-40">{previewLoading ? "Ищем кандидата…" : "Показать лучшего курьера"}</button>{preview ? <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm"><div className="text-xs font-medium text-blue-600">Лучший кандидат</div><div className="font-bold text-blue-950">{formatCourier(previewCourier)}</div><div className="mt-1 text-xs text-blue-700">{preview.distanceKm != null ? `${preview.distanceKm.toFixed(1)} км` : ""}{preview.etaMinutes != null ? ` · около ${preview.etaMinutes} мин` : ""}{preview.reason ? ` · ${preview.reason}` : ""}</div><button disabled={mutating} onClick={() => void autoAssign()} className="mt-2 w-full rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white">Назначить этого курьера</button></div> : null}</> : null}
+                {order.courierId ? <button disabled={mutating} onClick={() => void unassign()} className="w-full rounded-xl border border-rose-200 bg-white px-3 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-40">Снять курьера</button> : null}
+              </div>}
+            </section> : null}
 
-            {canReadFinance ? (
-              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-                {[
-                  ["Courier gross", formatMoney(order.courierFeeGross ?? 0)],
-                  ["Комиссия курьера", formatMoney(order.courierCommissionAmount ?? 0)],
-                  ["Courier NET", formatMoney(order.courierFee ?? 0)],
-                  ["Бонус курьера", formatMoney(order.courierBonusApplied ?? 0)],
-                  ["Комиссия ресторана", formatMoney(order.restaurantCommissionAmount ?? 0)],
-                  ["Выплата ресторану", formatMoney(order.restaurantPayoutAmount ?? 0)],
-                  ["Pricing source", order.pricingSource || "—"],
-                ].map(([label, value]) => (
-                  <div key={label} className="rounded-2xl bg-slate-50 p-4">
-                    <div className="text-xs font-medium text-slate-500">{label}</div>
-                    <div className="mt-1 text-sm font-bold text-slate-900">{value}</div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
-                Комиссии и выплаты скрыты: нет права finance.read.
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 className="text-2xl font-bold text-slate-900 mb-5">История заказа</h2>
-            {historyError ? <div className="mb-4 rounded-2xl bg-rose-50 p-4 text-sm text-rose-700">{historyError}</div> : null}
-            <div className="space-y-3 max-h-[520px] overflow-y-auto pr-1">
-              {timeline.map((item) => (
-                <div key={`${item.kind}:${item.id}`} className="rounded-2xl border border-slate-200 p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="font-bold text-slate-900">{timelineTitle(item)}</div>
-                    <div className="text-xs text-slate-500">{formatDate(item.createdAt)}</div>
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500">{actorLabel(item)}</div>
-                  {item.data?.reason ? <div className="mt-2 text-sm text-slate-700">Причина: {item.data.reason}</div> : null}
-                  {!item.data?.reason && typeof item.data?.metadata?.reason === "string" ? (
-                    <div className="mt-2 text-sm text-slate-700">Причина: {String(item.data.metadata.reason)}</div>
-                  ) : null}
-                </div>
-              ))}
-              {!timeline.length && !historyError ? <div className="text-sm text-slate-500">История пока пуста.</div> : null}
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          <div className="border-b border-slate-200 px-6 py-5">
-            <h2 className="text-2xl font-bold text-slate-900">Позиции заказа</h2>
-            <p className="mt-1 text-sm text-slate-500">Зафиксированные название, цена и количество на момент заказа</p>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full">
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50/80">
-                  <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500">Позиция</th>
-                  <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500">Цена</th>
-                  <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500">Кол-во</th>
-                  <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500">Сумма строки</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(order.items || []).map((item) => (
-                  <tr key={item.id} className="border-b border-slate-100">
-                    <td className="px-6 py-5"><div className="text-sm font-bold text-slate-900">{item.title}</div><div className="mt-1 text-xs text-slate-400">{item.productId || item.id}</div></td>
-                    <td className="px-6 py-5 text-sm font-semibold text-slate-800">{formatMoney(item.price)}</td>
-                    <td className="px-6 py-5 text-sm font-bold text-slate-800">{item.quantity}</td>
-                    <td className="px-6 py-5 text-sm font-bold text-slate-900">{formatMoney(item.price * item.quantity)}</td>
-                  </tr>
-                ))}
-                {!order.items?.length ? <tr><td colSpan={4} className="px-6 py-12 text-center text-sm text-slate-500">Позиции не найдены</td></tr> : null}
-              </tbody>
-            </table>
-          </div>
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-3 flex items-center justify-between"><h2 className="font-bold text-slate-950">История</h2><span className="text-xs text-slate-500">{timeline.length} событий</span></div>
+              {historyError ? <div className="mb-3 rounded-lg bg-rose-50 p-2 text-xs text-rose-700">{historyError}</div> : null}
+              <div className="max-h-[310px] space-y-2 overflow-y-auto pr-1">{timeline.map((item) => <div key={`${item.kind}:${item.id}`} className="border-l-2 border-slate-200 py-1 pl-3"><div className="flex justify-between gap-3"><div className="text-sm font-semibold text-slate-900">{timelineTitle(item)}</div><div className="shrink-0 text-[10px] text-slate-400">{formatDate(item.createdAt)}</div></div><div className="text-xs text-slate-500">{actorLabel(item)}</div>{item.data?.reason || typeof item.data?.metadata?.reason === "string" ? <div className="mt-1 text-xs text-slate-700">{item.data?.reason || String(item.data?.metadata?.reason)}</div> : null}</div>)}{!timeline.length && !historyError ? <div className="text-sm text-slate-500">История пока пуста</div> : null}</div>
+            </section>
+          </aside>
         </div>
       </div>
+
+      {confirmAction ? <div className="fixed inset-0 z-[9999] grid place-items-center bg-slate-950/45 p-4" onMouseDown={(event) => { if (event.currentTarget === event.target && !mutating) setConfirmAction(null); }}><div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl"><h3 className="text-lg font-bold text-slate-950">{confirmAction.title}</h3><p className="mt-2 text-sm leading-6 text-slate-600">{confirmAction.description}</p><div className="mt-5 flex justify-end gap-2"><button disabled={mutating} onClick={() => setConfirmAction(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700">Отмена</button><button disabled={mutating} onClick={() => { const action = confirmAction; void action.run().finally(() => setConfirmAction(null)); }} className={`rounded-xl px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50 ${confirmAction.danger ? "bg-rose-600" : "bg-slate-950"}`}>{mutating ? "Выполняется…" : confirmAction.confirmLabel}</button></div></div></div> : null}
     </div>
   );
 }
