@@ -1,54 +1,56 @@
-﻿'use client';
+'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  CalendarDays,
+  ImageIcon,
+  MapPin,
+  Phone,
+  RefreshCw,
+  Star,
+  Upload,
+  UtensilsCrossed,
+} from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+
 import { apiFetch } from '@/lib/api';
 
-type Suggestion = { type: 'warning' | 'info' | 'success'; title: string; text: string };
+type Suggestion = {
+  type: 'warning' | 'info' | 'success';
+  title: string;
+  text: string;
+};
 
 type Metrics = {
-  restaurant?: {
-    id: string;
-    number: number;
-    slug: string;
-    nameRu: string;
-    nameKk: string;
-    status: string;
-  };
   period?: { from: string; to: string; days: number };
-
   totalOrders?: number;
   deliveredCount?: number;
   canceledCount?: number;
   paidCount?: number;
-
   revenue?: { totalPaid: number; totalDelivered: number; totalRevenue: number };
   avgCheckRevenue?: number;
   trendRevenuePercent?: number | null;
-
   rates?: { cancelRatePercent: number; paidRatePercent: number; deliveredRatePercent: number };
-
   customers?: {
     activeCustomers: number;
     activeCustomers7d: number;
     activeCustomers30d: number;
     newCustomers: number;
     repeatRatePercent: number;
-    rfmDistribution: Record<string, number>;
   };
-
   reviews?: { ratingAvg: number | null; reviewsCount: number; reviewRatePercent: number };
-
-  daily?: {
+  daily?: Array<{
     date: string;
     orders: number;
     delivered: number;
     canceled: number;
     paid: number;
     revenue: number;
-  }[];
-
-  topClients?: {
+  }>;
+  topClients?: Array<{
     userId: string;
     phone: string | null;
     name: string | null;
@@ -57,9 +59,8 @@ type Metrics = {
     lastOrderAt: string | null;
     recencyDays: number | null;
     status: string;
-  }[];
-
-  recentOrders?: {
+  }>;
+  recentOrders?: Array<{
     id: string;
     createdAt: string;
     status: string;
@@ -69,466 +70,224 @@ type Metrics = {
     userId: string;
     userName: string | null;
     userPhone: string | null;
-  }[];
-
+  }>;
   suggestions?: Suggestion[];
 };
 
 type RestaurantDetails = {
   id: string;
-  number: number;
-  slug: string;
+  number?: number;
   nameRu: string;
-  nameKk: string;
+  nameKk?: string | null;
   descriptionRu?: string | null;
   descriptionKk?: string | null;
   phone?: string | null;
   address?: string | null;
   workingHours?: string | null;
   coverImageUrl?: string | null;
-  ratingAvg?: number;
-  ratingCount?: number;
-  status: string;
-  isInApp: boolean;
-  restaurantCommissionPctOverride?: number | null;
-  isPinned?: boolean;
-  sortOrder?: number;
-  useRandom?: boolean;
-  createdAt?: string;
-  updatedAt?: string;
-  effectiveRestaurantCommissionPct?: number;
+  ratingAvg?: number | null;
+  ratingCount?: number | null;
+  status?: string | null;
+  runtimeStatus?: string | null;
+  onboardingStatus?: string | null;
+  onboardingNote?: string | null;
+  isAcceptingOrders?: boolean | null;
+  isInApp?: boolean | null;
+  ownerPhone?: string | null;
+  ownerUser?: {
+    phone?: string | null;
+    firstName?: string | null;
+    lastName?: string | null;
+  } | null;
 };
 
-function isHtmlError(value: unknown) {
-  const text = String(value || '').trim().toLowerCase();
-  return text.startsWith('<!doctype html') || text.startsWith('<html');
+function money(value: number | null | undefined): string {
+  return `${Math.round(Number(value ?? 0)).toLocaleString('ru-RU')} ₸`;
 }
 
-function apiErrorMessage(error: unknown, fallback: string) {
-  const err = error as Error & { payload?: unknown };
-  const payload = err?.payload as { raw?: unknown } | undefined;
-  const raw = payload?.raw;
-
-  if (isHtmlError(raw) || isHtmlError(err?.message)) {
-    return fallback;
-  }
-
-  return err?.message || fallback;
+function percent(value: number | null | undefined): string {
+  const n = Number(value ?? 0);
+  return `${Number.isFinite(n) ? Math.round(n) : 0}%`;
 }
 
-function fmtMoney(n: number | undefined | null) {
-  const x = Math.round(Number(n ?? 0));
-  return `${x.toLocaleString('ru-RU')} ₸`;
+function dateTime(value: string | null | undefined): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
 }
 
-function fmtDateTime(s: string | null | undefined) {
-  if (!s) return '—';
-  return new Date(s).toLocaleString('ru-RU');
+function dateLabel(value: string): string {
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
 }
 
-function toYmdLocalInput(d: Date) {
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
+function toDateInput(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
-function badgeBySuggestionType(t: Suggestion['type']) {
-  if (t === 'warning') return 'badge badge-light-danger';
-  if (t === 'success') return 'badge badge-light-success';
-  return 'badge badge-light-primary';
-}
-
-function statusBadge(status: string) {
-  const s = String(status || '').toUpperCase();
-  if (s.includes('CANCEL')) return 'badge badge-light-danger';
-  if (s.includes('DELIVER')) return 'badge badge-light-success';
-  if (s.includes('PAID')) return 'badge badge-light-success';
-  if (s.includes('FAIL')) return 'badge badge-light-danger';
-  if (s.includes('CREAT') || s.includes('NEW')) return 'badge badge-light-primary';
-  return 'badge badge-light-warning';
-}
-
-function levelColor(t: number) {
-  if (t <= 0.33) return 'rgba(220, 38, 38, 0.95)';
-  if (t <= 0.66) return 'rgba(245, 158, 11, 0.95)';
-  return 'rgba(34, 197, 94, 0.95)';
-}
-
-function detectPreset(from: string, to: string): 7 | 30 | 90 | null {
-  if (!from || !to) return null;
-
-  const today = new Date();
-  const toExpected = toYmdLocalInput(today);
-  if (to !== toExpected) return null;
-
-  const ms = today.getTime();
-  const f7 = toYmdLocalInput(new Date(ms - 7 * 86400000));
-  const f30 = toYmdLocalInput(new Date(ms - 30 * 86400000));
-  const f90 = toYmdLocalInput(new Date(ms - 90 * 86400000));
-
-  if (from === f7) return 7;
-  if (from === f30) return 30;
-  if (from === f90) return 90;
-  return null;
-}
-
-function absUploadUrl(path?: string | null) {
+function imageUrl(path?: string | null): string {
   if (!path) return '';
-  if (path.startsWith('http://') || path.startsWith('https://')) return path;
+  if (/^https?:\/\//i.test(path)) return path;
   return path.startsWith('/') ? `/api/proxy${path}` : `/api/proxy/${path}`;
 }
 
-/** ====== UI Primitives ====== */
-
-function Panel({
-  title,
-  subtitle,
-  right,
-  children,
-  className = '',
-  tone = 'default',
-}: {
-  title: React.ReactNode;
-  subtitle?: React.ReactNode;
-  right?: React.ReactNode;
-  children: React.ReactNode;
-  className?: string;
-  tone?: 'default' | 'muted';
-}) {
-  const shell = tone === 'muted' ? 'bg-slate-100/80 border-slate-200' : 'bg-white border-slate-200';
-  const body = tone === 'muted' ? 'bg-white/70' : 'bg-white';
-
-  return (
-    <div className={`rounded-2xl border shadow-sm ${shell} ${className}`}>
-      <div className="px-4 py-4 border-b border-slate-200/70 flex items-start justify-between gap-4">
-        <div>
-          <div className="font-semibold text-2xl leading-tight">{title}</div>
-          {subtitle ? <div className="text-base opacity-70 mt-2">{subtitle}</div> : null}
-        </div>
-        {right ? <div className="shrink-0 text-base">{right}</div> : null}
-      </div>
-
-      <div className={`p-5 rounded-b-2xl ${body}`}>{children}</div>
-    </div>
-  );
+function errorStatus(error: unknown): number | null {
+  if (!error || typeof error !== 'object') return null;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === 'number' ? status : null;
 }
 
-type StatTheme = 'green' | 'blue' | 'purple' | 'orange' | 'red' | 'teal' | 'gray';
+function friendlyError(error: unknown, fallback: string): string {
+  const status = errorStatus(error);
+  if (status === 401) return 'Сессия истекла. Войдите снова.';
+  if (status === 403) return 'У вас нет прав для просмотра этого ресторана.';
+  if (status === 404) return 'Ресторан не найден.';
+  if (status !== null && status >= 500) return 'Данные временно недоступны. Повторите попытку позже.';
+  return fallback;
+}
 
-function themeToBg(theme: StatTheme) {
-  switch (theme) {
-    case 'green':
-      return 'bg-gradient-to-br from-emerald-500 to-emerald-700';
-    case 'blue':
-      return 'bg-gradient-to-br from-sky-500 to-indigo-700';
-    case 'purple':
-      return 'bg-gradient-to-br from-fuchsia-500 to-purple-700';
-    case 'orange':
-      return 'bg-gradient-to-br from-orange-400 to-rose-600';
-    case 'red':
-      return 'bg-gradient-to-br from-red-500 to-rose-700';
-    case 'teal':
-      return 'bg-gradient-to-br from-teal-500 to-cyan-700';
-    default:
-      return 'bg-gradient-to-br from-slate-500 to-slate-700';
+function moderationLabel(value?: string | null): string {
+  switch (String(value ?? '').toUpperCase()) {
+    case 'DRAFT': return 'Черновик';
+    case 'PENDING_REVIEW': return 'На проверке';
+    case 'NEEDS_CHANGES': return 'Нужны изменения';
+    case 'APPROVED': return 'Одобрен';
+    case 'REJECTED': return 'Отклонён';
+    case 'BLOCKED': return 'Заблокирован';
+    default: return 'Нужно проверить';
   }
 }
 
-function StatCard({
-  title,
-  value,
-  hint,
-  theme = 'blue',
-  icon,
-  right,
-}: {
-  title: string;
-  value: React.ReactNode;
-  hint?: React.ReactNode;
-  theme?: StatTheme;
-  icon?: React.ReactNode;
-  right?: React.ReactNode;
-}) {
-  return (
-    <div className={`rounded-2xl p-5 text-white shadow-sm border border-white/15 ${themeToBg(theme)}`}>
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center">
-            <span className="text-2xl">{icon ?? '●'}</span>
-          </div>
-          <div className="text-lg opacity-95 font-semibold">{title}</div>
-        </div>
-        {right ? <div className="text-base opacity-95">{right}</div> : null}
-      </div>
-
-      <div className="mt-4 text-4xl font-extrabold leading-tight">{value}</div>
-
-      {hint ? <div className="mt-3 text-base opacity-95">{hint}</div> : null}
-    </div>
-  );
+function moderationTone(value?: string | null): 'neutral' | 'success' | 'warning' | 'danger' {
+  const key = String(value ?? '').toUpperCase();
+  if (key === 'APPROVED') return 'success';
+  if (key === 'REJECTED' || key === 'BLOCKED') return 'danger';
+  if (key === 'PENDING_REVIEW' || key === 'NEEDS_CHANGES' || key === 'DRAFT' || !key) return 'warning';
+  return 'neutral';
 }
 
-function NiceLineChart({
-  title,
-  subtitle,
-  data,
-  valueKey,
-  valueSuffix,
-  height = 210,
-  formatValue,
-}: {
-  title: string;
-  subtitle?: string;
-  data: { date: string; [k: string]: any }[];
-  valueKey: string;
-  valueSuffix?: string;
-  height?: number;
-  formatValue?: (v: number) => string;
-}) {
-  const width = 980;
-  const padL = 14;
-  const padR = 52;
-  const padT = 14;
-  const padB = 32;
-
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  const values = (data || []).map((d) => Number(d?.[valueKey] || 0));
-  const max = Math.max(1, ...values);
-  const min = 0;
-
-  const plotW = width - padL - padR;
-  const plotH = height - padT - padB;
-
-  const points = values.map((v, i) => {
-    const x = padL + (i * plotW) / Math.max(1, values.length - 1);
-    const y = padT + ((max - v) * plotH) / Math.max(1, max - min);
-    const t = max > 0 ? v / max : 0;
-    return { x, y, v, t, i };
-  });
-
-  const path = points
-    .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
-    .join(' ');
-
-  const last = points[points.length - 1]?.v ?? 0;
-
-  const ticks = [0, 0.33, 0.66, 1].map((t) => {
-    const y = padT + (1 - t) * plotH;
-    const v = Math.round(max * t);
-    return { t, y, v };
-  });
-
-  const xLabelEvery = Math.max(1, Math.ceil((data?.length || 1) / 8));
-
-  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
-  const [tip, setTip] = useState<{ x: number; y: number } | null>(null);
-
-  const valueToText = (v: number) => {
-    if (formatValue) return formatValue(v);
-    return `${v.toLocaleString('ru-RU')}${valueSuffix || ''}`;
-  };
-
-  const dateToText = (ymd: string) => {
-    try {
-      const [Y, M, D] = ymd.split('-').map(Number);
-      if (!Y || !M || !D) return ymd;
-      const dt = new Date(Y, M - 1, D);
-      return new Intl.DateTimeFormat('ru-RU', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-      }).format(dt);
-    } catch {
-      return ymd;
-    }
-  };
-
-  const onMove = (e: React.MouseEvent) => {
-    if (!wrapRef.current || points.length === 0) return;
-
-    const rect = wrapRef.current.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-
-    const scrollLeft = wrapRef.current.scrollLeft || 0;
-    const mxSvg = mx + scrollLeft;
-
-    let best = 0;
-    let bestDist = Infinity;
-    for (let i = 0; i < points.length; i++) {
-      const d = Math.abs(points[i].x - mxSvg);
-      if (d < bestDist) {
-        bestDist = d;
-        best = i;
-      }
-    }
-
-    setHoverIdx(best);
-    setTip({ x: mx, y: my });
-  };
-
-  const onLeave = () => {
-    setHoverIdx(null);
-    setTip(null);
-  };
-
-  const hoverPoint = hoverIdx != null ? points[hoverIdx] : null;
-  const hoverData = hoverIdx != null ? data?.[hoverIdx] : null;
-
-  const tooltipText =
-    hoverPoint && hoverData
-      ? {
-          date: dateToText(String(hoverData.date || '')),
-          value: valueToText(Number(hoverPoint.v || 0)),
-        }
-      : null;
-
-  return (
-    <div>
-      {title ? (
-        <div className="flex items-start justify-between gap-4 mb-4">
-          <div>
-            <div className="font-semibold text-2xl">{title}</div>
-            {subtitle ? <div className="text-base opacity-70 mt-2">{subtitle}</div> : null}
-          </div>
-          <div className="text-lg opacity-70">
-            Последнее: <span className="text-black font-semibold">{valueToText(last)}</span>
-          </div>
-        </div>
-      ) : null}
-
-      <div
-        ref={wrapRef}
-        className="overflow-auto rounded-2xl border border-slate-200 bg-white"
-        style={{ position: 'relative' }}
-        onMouseMove={onMove}
-        onMouseLeave={onLeave}
-      >
-        <svg width={width} height={height} className="block">
-          {ticks.map((t, idx) => (
-            <g key={idx}>
-              <line x1={padL} y1={t.y} x2={width - padR} y2={t.y} stroke="rgba(0,0,0,0.08)" />
-              <text x={width - padR + 8} y={t.y + 5} fontSize="14" fill="rgba(0,0,0,0.55)">
-                {t.v.toLocaleString('ru-RU')}
-              </text>
-            </g>
-          ))}
-
-          <line x1={padL} y1={padT} x2={padL} y2={height - padB} stroke="rgba(0,0,0,0.12)" />
-          <line x1={padL} y1={height - padB} x2={width - padR} y2={height - padB} stroke="rgba(0,0,0,0.12)" />
-
-          <path d={path} fill="none" stroke="rgba(15, 23, 42, 0.85)" strokeWidth="2.6" />
-
-          {points.map((p) => (
-            <circle
-              key={p.i}
-              cx={p.x}
-              cy={p.y}
-              r={hoverIdx === p.i ? 5.6 : 3.6}
-              fill={levelColor(p.t)}
-              stroke="rgba(0,0,0,0.12)"
-            />
-          ))}
-
-          {hoverPoint ? (
-            <g>
-              <line
-                x1={hoverPoint.x}
-                y1={padT}
-                x2={hoverPoint.x}
-                y2={height - padB}
-                stroke="rgba(0,0,0,0.10)"
-                strokeDasharray="4 4"
-              />
-              <line
-                x1={padL}
-                y1={hoverPoint.y}
-                x2={width - padR}
-                y2={hoverPoint.y}
-                stroke="rgba(0,0,0,0.10)"
-                strokeDasharray="4 4"
-              />
-            </g>
-          ) : null}
-
-          {(data || []).map((d, i) => {
-            if (i % xLabelEvery !== 0 && i !== data.length - 1) return null;
-            const x = padL + (i * plotW) / Math.max(1, values.length - 1);
-            const label = String(d.date || '').slice(5);
-            return (
-              <text key={i} x={x} y={height - 8} fontSize="14" fill="rgba(0,0,0,0.55)" textAnchor="middle">
-                {label}
-              </text>
-            );
-          })}
-        </svg>
-
-        {tooltipText && tip ? (
-          <div
-            style={{
-              position: 'absolute',
-              left: Math.min(tip.x + 12, 820),
-              top: Math.max(8, tip.y - 56),
-              pointerEvents: 'none',
-              background: 'rgba(2,6,23,0.88)',
-              color: 'white',
-              padding: '12px 14px',
-              borderRadius: 14,
-              fontSize: 14,
-              boxShadow: '0 10px 30px rgba(0,0,0,0.25)',
-              maxWidth: 320,
-              zIndex: 5,
-            }}
-          >
-            <div style={{ fontWeight: 900, marginBottom: 4 }}>{tooltipText.date}</div>
-            <div style={{ opacity: 0.98 }}>
-              {valueKey === 'orders' ? 'Заказы: ' : valueKey === 'revenue' ? 'Сумма: ' : 'Значение: '}
-              <span style={{ fontWeight: 900 }}>{tooltipText.value}</span>
-            </div>
-          </div>
-        ) : null}
-      </div>
-
-      <div className="text-base opacity-70 mt-3">
-        Цвет: <span style={{ color: 'rgba(220,38,38,0.95)' }}>мало</span> →{' '}
-        <span style={{ color: 'rgba(245,158,11,0.95)' }}>средне</span> →{' '}
-        <span style={{ color: 'rgba(34,197,94,0.95)' }}>много</span>
-      </div>
-    </div>
-  );
+function orderStatus(value?: string | null): string {
+  switch (String(value ?? '').toUpperCase()) {
+    case 'CREATED': return 'Создан';
+    case 'ACCEPTED': return 'Принят';
+    case 'COOKING': return 'Готовится';
+    case 'READY': return 'Готов';
+    case 'ON_THE_WAY': return 'В пути';
+    case 'DELIVERED': return 'Доставлен';
+    case 'CANCELLED':
+    case 'CANCELED': return 'Отменён';
+    default: return 'Не указан';
+  }
 }
 
-function HeaderMainButton({
-  label,
-  sublabel,
-  icon,
-  onClick,
-  variant,
-}: {
-  label: string;
-  sublabel?: string;
-  icon: React.ReactNode;
-  onClick: () => void;
-  variant: 'menu' | 'reviews';
-}) {
-  const base =
-    'inline-flex items-center gap-4 px-5 py-4 rounded-2xl font-extrabold shadow-sm border transition-all active:scale-[0.99]';
+function paymentStatus(value?: string | null): string {
+  switch (String(value ?? '').toUpperCase()) {
+    case 'PAID': return 'Оплачен';
+    case 'PENDING': return 'Ожидает оплаты';
+    case 'FAILED': return 'Ошибка оплаты';
+    case 'REFUNDED': return 'Возвращён';
+    case 'CANCELLED':
+    case 'CANCELED': return 'Отменён';
+    default: return 'Не указан';
+  }
+}
 
-  const styles =
-    variant === 'menu'
-      ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700/40'
-      : 'bg-amber-400 hover:bg-amber-500 text-black border-amber-600/30';
+function paymentMethod(value?: string | null): string {
+  switch (String(value ?? '').toUpperCase()) {
+    case 'CARD': return 'Карта';
+    case 'CASH': return 'Наличные';
+    case 'ONLINE': return 'Онлайн';
+    default: return '';
+  }
+}
 
+function Tag({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'success' | 'warning' | 'danger' | 'blue' }) {
+  const cls = {
+    neutral: 'border-slate-200 bg-slate-50 text-slate-600',
+    success: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    warning: 'border-amber-200 bg-amber-50 text-amber-800',
+    danger: 'border-red-200 bg-red-50 text-red-700',
+    blue: 'border-blue-200 bg-blue-50 text-blue-700',
+  }[tone];
+  return <span className={`inline-flex rounded-md border px-2 py-1 text-[11px] font-bold ${cls}`}>{children}</span>;
+}
+
+function Button({ children, onClick, primary = false, disabled = false }: { children: ReactNode; onClick?: () => void; primary?: boolean; disabled?: boolean }) {
   return (
-    <button className={`${base} ${styles}`} onClick={onClick} style={{ minWidth: 220 }}>
-      <span className="w-12 h-12 rounded-2xl bg-black/10 flex items-center justify-center text-2xl">{icon}</span>
-      <span className="flex flex-col items-start leading-tight">
-        <span className="text-lg">{label}</span>
-        {sublabel ? <span className="text-sm opacity-90 font-semibold">{sublabel}</span> : null}
-      </span>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex h-10 items-center justify-center gap-2 rounded-lg border px-4 text-[13px] font-bold transition disabled:cursor-not-allowed disabled:opacity-45 ${primary ? 'border-slate-950 bg-slate-950 text-white hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-800 hover:bg-slate-50'}`}
+    >
+      {children}
     </button>
+  );
+}
+
+function Kpi({ label, value, note }: { label: string; value: ReactNode; note?: string }) {
+  return (
+    <div className="border-r border-slate-200 px-5 py-4 last:border-r-0">
+      <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-400">{label}</div>
+      <div className="mt-2 text-[25px] font-black tracking-[-0.03em] text-slate-950">{value}</div>
+      {note ? <div className="mt-1 text-[11px] font-medium text-slate-400">{note}</div> : null}
+    </div>
+  );
+}
+
+function Section({ title, subtitle, right, children }: { title: string; subtitle?: string; right?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+        <div>
+          <h2 className="text-[16px] font-black text-slate-950">{title}</h2>
+          {subtitle ? <p className="mt-1 text-[12px] font-medium text-slate-400">{subtitle}</p> : null}
+        </div>
+        {right}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function LineChart({ data, valueKey, formatValue }: { data: NonNullable<Metrics['daily']>; valueKey: 'revenue' | 'orders'; formatValue: (value: number) => string }) {
+  const width = 900;
+  const height = 220;
+  const left = 22;
+  const right = 28;
+  const top = 22;
+  const bottom = 38;
+  const values = data.map((item) => Number(item[valueKey] ?? 0));
+  const max = Math.max(1, ...values);
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const points = values.map((value, index) => ({
+    x: left + (index * plotWidth) / Math.max(1, values.length - 1),
+    y: top + ((max - value) * plotHeight) / max,
+    value,
+  }));
+  const path = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(' ');
+  const labelEvery = Math.max(1, Math.ceil(data.length / 7));
+
+  return (
+    <div className="overflow-x-auto p-5">
+      <svg viewBox={`0 0 ${width} ${height}`} className="min-w-[700px] w-full">
+        {[0, 0.5, 1].map((part) => {
+          const y = top + plotHeight * part;
+          return <line key={part} x1={left} y1={y} x2={width - right} y2={y} stroke="#e5e7eb" strokeWidth="1" />;
+        })}
+        <path d={path} fill="none" stroke="#111827" strokeWidth="2.5" />
+        {points.map((point, index) => (
+          <g key={index}>
+            <circle cx={point.x} cy={point.y} r="3.5" fill="#111827"><title>{`${dateLabel(data[index].date)} · ${formatValue(point.value)}`}</title></circle>
+            {index % labelEvery === 0 || index === points.length - 1 ? <text x={point.x} y={height - 12} fontSize="11" fill="#94a3b8" textAnchor="middle">{dateLabel(data[index].date)}</text> : null}
+          </g>
+        ))}
+      </svg>
+    </div>
   );
 }
 
@@ -536,899 +295,235 @@ export default function RestaurantDetailsPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
   const id = params.id;
-
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [metrics, setMetrics] = useState<Metrics | null>(null);
-
-  const [restaurantDetails, setRestaurantDetails] = useState<RestaurantDetails | null>(null);
-  const [restaurantLoading, setRestaurantLoading] = useState(false);
-  const [restaurantErr, setRestaurantErr] = useState<string | null>(null);
-
-  const [coverFile, setCoverFile] = useState<File | null>(null);
-  const [coverPreview, setCoverPreview] = useState<string>('');
-  const [coverUploading, setCoverUploading] = useState(false);
-  const [coverUploadMsg, setCoverUploadMsg] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const today = useMemo(() => new Date(), []);
-  const [presetDays, setPresetDays] = useState<number>(30);
-  const [from, setFrom] = useState<string>(toYmdLocalInput(new Date(today.getTime() - 30 * 86400000)));
-  const [to, setTo] = useState<string>(toYmdLocalInput(today));
-
-  const activePreset = useMemo(() => detectPreset(from, to), [from, to]);
-
-  const [ordersOpen, setOrdersOpen] = useState(true);
-  const [clientsOpen, setClientsOpen] = useState(true);
+  const [from, setFrom] = useState(toDateInput(new Date(today.getTime() - 30 * 86400000)));
+  const [to, setTo] = useState(toDateInput(today));
+  const [details, setDetails] = useState<RestaurantDetails | null>(null);
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [metricsLoading, setMetricsLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [metricsError, setMetricsError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const query = useMemo(() => {
-    const sp = new URLSearchParams();
-    if (from && to) {
-      sp.set('from', from);
-      sp.set('to', to);
-      return sp.toString();
-    }
-    sp.set('days', String(presetDays));
-    return sp.toString();
-  }, [from, to, presetDays]);
+    const search = new URLSearchParams();
+    search.set('from', from);
+    search.set('to', to);
+    return search.toString();
+  }, [from, to]);
 
-  async function loadRestaurant() {
-    setRestaurantLoading(true);
-    setRestaurantErr(null);
+  const loadDetails = useCallback(async () => {
     try {
-      const data = await apiFetch<RestaurantDetails>(`/restaurants/${id}`);
-      setRestaurantDetails(data);
-    } catch (e: any) {
-      setRestaurantErr(apiErrorMessage(e, 'Не удалось загрузить данные ресторана'));
+      setLoading(true);
+      setError(null);
+      const value = await apiFetch<RestaurantDetails>(`/restaurants/admin/${id}`);
+      setDetails(value);
+    } catch (caught) {
+      setError(friendlyError(caught, 'Не удалось загрузить ресторан.'));
     } finally {
-      setRestaurantLoading(false);
+      setLoading(false);
     }
-  }
-
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    setErr(null);
-
-    apiFetch<Metrics>(`/restaurants/${id}/metrics?${query}`)
-      .then((m) => {
-        if (!alive) return;
-        setMetrics(m || null);
-      })
-      .catch((e: any) => {
-        if (!alive) return;
-        setMetrics(null);
-        console.warn('Optional restaurant metrics failed', {
-          endpoint: `/api/proxy/restaurants/${id}/metrics?${query}`,
-          status: e?.status,
-        });
-        setErr(apiErrorMessage(e, 'Метрики временно недоступны'));
-      })
-      .finally(() => alive && setLoading(false));
-
-    return () => {
-      alive = false;
-    };
-  }, [id, query]);
-
-  useEffect(() => {
-    loadRestaurant();
   }, [id]);
 
-  useEffect(() => {
-    return () => {
-      if (coverPreview && coverPreview.startsWith('blob:')) {
-        URL.revokeObjectURL(coverPreview);
-      }
-    };
-  }, [coverPreview]);
-
-  function applyPreset(days: number) {
-    setPresetDays(days);
-    const t = new Date();
-    setTo(toYmdLocalInput(t));
-    setFrom(toYmdLocalInput(new Date(t.getTime() - days * 86400000)));
-  }
-
-  function onPickCoverFile(file: File | null) {
-    setCoverUploadMsg(null);
-
-    if (coverPreview && coverPreview.startsWith('blob:')) {
-      URL.revokeObjectURL(coverPreview);
-    }
-
-    setCoverFile(file);
-
-    if (file) {
-      const localUrl = URL.createObjectURL(file);
-      setCoverPreview(localUrl);
-    } else {
-      setCoverPreview('');
-    }
-  }
-
-  async function uploadCover() {
-    if (!coverFile) {
-      setCoverUploadMsg('Файл обязателен');
-      return;
-    }
-
+  const loadMetrics = useCallback(async () => {
     try {
-      setCoverUploading(true);
-      setCoverUploadMsg(null);
-
-      const formData = new FormData();
-      formData.append('file', coverFile);
-
-      const updated = await apiFetch<RestaurantDetails>(`/restaurants/${id}/cover`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      setRestaurantDetails((prev) => ({
-        ...(prev || ({} as RestaurantDetails)),
-        ...updated,
-      }));
-
-      setCoverFile(null);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-
-      if (coverPreview && coverPreview.startsWith('blob:')) {
-        URL.revokeObjectURL(coverPreview);
-      }
-      setCoverPreview('');
-      setCoverUploadMsg('Изображение загружено');
-    } catch (e: any) {
-      setCoverUploadMsg(apiErrorMessage(e, 'Не удалось загрузить изображение'));
+      setMetricsLoading(true);
+      setMetricsError(null);
+      const value = await apiFetch<Metrics>(`/restaurants/${id}/metrics?${query}`);
+      setMetrics(value);
+    } catch (caught) {
+      setMetrics(null);
+      setMetricsError(friendlyError(caught, 'Статистика за выбранный период временно недоступна.'));
     } finally {
-      setCoverUploading(false);
+      setMetricsLoading(false);
     }
-  }
+  }, [id, query]);
 
-  const safe = {
-    totalOrders: metrics?.totalOrders ?? 0,
-    deliveredCount: metrics?.deliveredCount ?? 0,
-    canceledCount: metrics?.canceledCount ?? 0,
-    paidCount: metrics?.paidCount ?? 0,
+  useEffect(() => { void loadDetails(); }, [loadDetails]);
+  useEffect(() => { void loadMetrics(); }, [loadMetrics]);
 
-    revenueTotal: metrics?.revenue?.totalRevenue ?? 0,
-    avgCheck: metrics?.avgCheckRevenue ?? 0,
-    trend: metrics?.trendRevenuePercent ?? null,
-
-    paidRate: metrics?.rates?.paidRatePercent ?? 0,
-    cancelRate: metrics?.rates?.cancelRatePercent ?? 0,
-
-    ratingAvg: metrics?.reviews?.ratingAvg ?? null,
-    reviewsCount: metrics?.reviews?.reviewsCount ?? 0,
-    reviewRate: metrics?.reviews?.reviewRatePercent ?? 0,
-
-    activeCustomers: metrics?.customers?.activeCustomers ?? 0,
-    activeCustomers7d: metrics?.customers?.activeCustomers7d ?? 0,
-    activeCustomers30d: metrics?.customers?.activeCustomers30d ?? 0,
-    newCustomers: metrics?.customers?.newCustomers ?? 0,
-    repeatRate: metrics?.customers?.repeatRatePercent ?? 0,
+  const applyPreset = (days: number) => {
+    const end = new Date();
+    setTo(toDateInput(end));
+    setFrom(toDateInput(new Date(end.getTime() - days * 86400000)));
   };
 
-  const reviewsUrl = useMemo(() => {
-    const sp = new URLSearchParams();
-    if (from) sp.set('from', from);
-    if (to) sp.set('to', to);
-    const qs = sp.toString();
-    return `/layout-20/restaurants/${id}/reviews${qs ? `?${qs}` : ''}`;
-  }, [id, from, to]);
+  const uploadCover = async (file: File | null) => {
+    if (!file) return;
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setError('Выберите изображение JPG, PNG или WebP.');
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setError('Размер изображения не должен превышать 8 МБ.');
+      return;
+    }
+    try {
+      setUploading(true);
+      setError(null);
+      const form = new FormData();
+      form.append('file', file);
+      await apiFetch(`/restaurants/${id}/cover`, { method: 'POST', body: form });
+      await loadDetails();
+      setNotice('Обложка обновлена.');
+      if (fileRef.current) fileRef.current.value = '';
+    } catch (caught) {
+      setError(friendlyError(caught, 'Не удалось загрузить изображение.'));
+    } finally {
+      setUploading(false);
+    }
+  };
 
-  const menuUrl = useMemo(() => `/layout-20/restaurants/${id}/menu`, [id]);
+  const safe = {
+    orders: metrics?.totalOrders ?? 0,
+    delivered: metrics?.deliveredCount ?? 0,
+    canceled: metrics?.canceledCount ?? 0,
+    paid: metrics?.paidCount ?? 0,
+    revenue: metrics?.revenue?.totalRevenue ?? 0,
+    avgCheck: metrics?.avgCheckRevenue ?? 0,
+    cancelRate: metrics?.rates?.cancelRatePercent ?? 0,
+    paidRate: metrics?.rates?.paidRatePercent ?? 0,
+    clients: metrics?.customers?.activeCustomers ?? 0,
+    clients7: metrics?.customers?.activeCustomers7d ?? 0,
+    clients30: metrics?.customers?.activeCustomers30d ?? 0,
+    newClients: metrics?.customers?.newCustomers ?? 0,
+    repeatRate: metrics?.customers?.repeatRatePercent ?? 0,
+    rating: metrics?.reviews?.ratingAvg ?? details?.ratingAvg ?? null,
+    reviews: metrics?.reviews?.reviewsCount ?? details?.ratingCount ?? 0,
+  };
 
-  const headerRight = (
-    <div className="flex items-center gap-4">
-      <HeaderMainButton
-        variant="menu"
-        icon="🍽️"
-        label="Меню"
-        sublabel="управление товарами"
-        onClick={() => router.push(menuUrl)}
-      />
-      <HeaderMainButton
-        variant="reviews"
-        icon="★"
-        label="Отзывы"
-        sublabel={`рейтинг и комментарии · ${safe.reviewsCount}`}
-        onClick={() => router.push(reviewsUrl)}
-      />
-    </div>
-  );
+  const owner = useMemo(() => {
+    const name = [details?.ownerUser?.firstName, details?.ownerUser?.lastName].filter(Boolean).join(' ').trim();
+    return name || details?.ownerPhone || details?.ownerUser?.phone || 'Не указан';
+  }, [details]);
+
+  if (loading && !details) {
+    return <div className="min-h-screen bg-[#f7f7f8] p-6"><div className="h-40 animate-pulse rounded-xl border border-slate-200 bg-white" /></div>;
+  }
 
   return (
-    <div className="space-y-5 rounded-2xl p-4 md:p-5 bg-slate-50">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
-          <button className="btn btn-lg btn-light" onClick={() => router.back()} style={{ borderRadius: 14 }}>
-            ← Назад
-          </button>
-          <div>
-            <div className="text-3xl font-extrabold leading-tight">Ресторан · Аналитика</div>
-            <div className="text-lg opacity-70 mt-1">
-              {metrics?.restaurant?.nameRu || restaurantDetails?.nameRu || '—'}
-              {loading ? ' · загрузка…' : ''}
+    <div className="min-h-screen bg-[#f7f7f8] px-5 py-6 text-slate-950 sm:px-6 lg:px-8">
+      <div className="mx-auto w-full max-w-[1680px] space-y-4">
+        <header className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <button type="button" onClick={() => router.push('/layout-20/restaurants')} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50" aria-label="Назад"><ArrowLeft className="h-4 w-4" /></button>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2"><h1 className="truncate text-[30px] font-black tracking-[-0.03em]">{details?.nameRu || 'Ресторан'}</h1><Tag tone={moderationTone(details?.onboardingStatus)}>{moderationLabel(details?.onboardingStatus)}</Tag></div>
+              <p className="mt-1 text-[13px] font-medium text-slate-400">Карточка ресторана и показатели работы</p>
             </div>
           </div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => router.push(`/layout-20/restaurants/${id}/menu`)}><UtensilsCrossed className="h-4 w-4" /> Меню</Button>
+            <Button onClick={() => router.push(`/layout-20/orders?restaurantId=${encodeURIComponent(id)}`)}>Заказы</Button>
+            <Button onClick={() => router.push(`/layout-20/restaurants/${id}/reviews`)}><Star className="h-4 w-4" /> Отзывы</Button>
+            <Button primary onClick={() => router.push('/layout-20/restaurants')}>Управление рестораном <ArrowRight className="h-4 w-4" /></Button>
+          </div>
+        </header>
+
+        {error ? <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-[13px] font-semibold text-red-700">{error}</div> : null}
+        {notice ? <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-[13px] font-semibold text-emerald-700">{notice}</div> : null}
+
+        <section className="grid overflow-hidden rounded-xl border border-slate-200 bg-white xl:grid-cols-[360px_1fr]">
+          <div className="border-b border-slate-200 p-5 xl:border-b-0 xl:border-r">
+            <div className="flex aspect-[16/10] items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+              {details?.coverImageUrl ? <img src={imageUrl(details.coverImageUrl)} alt="Обложка ресторана" className="h-full w-full object-cover" /> : <ImageIcon className="h-7 w-7 text-slate-300" />}
+            </div>
+            <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(event) => void uploadCover(event.target.files?.[0] ?? null)} />
+            <div className="mt-3"><Button onClick={() => fileRef.current?.click()} disabled={uploading}><Upload className="h-4 w-4" /> {uploading ? 'Загружаю' : 'Изменить обложку'}</Button></div>
+          </div>
+
+          <div className="p-5">
+            <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+              <div><div className="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-400">Адрес</div><div className="mt-2 flex items-start gap-2 text-[13px] font-bold text-slate-800"><MapPin className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />{details?.address || 'Не указан'}</div></div>
+              <div><div className="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-400">Телефон</div><div className="mt-2 flex items-center gap-2 text-[13px] font-bold text-slate-800"><Phone className="h-4 w-4 text-slate-400" />{details?.phone || 'Не указан'}</div></div>
+              <div><div className="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-400">График работы</div><div className="mt-2 flex items-center gap-2 text-[13px] font-bold text-slate-800"><CalendarDays className="h-4 w-4 text-slate-400" />{details?.workingHours || 'Не указан'}</div></div>
+              <div><div className="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-400">Владелец</div><div className="mt-2 text-[13px] font-bold text-slate-800">{owner}</div></div>
+              <div><div className="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-400">Публикация</div><div className="mt-2">{details?.isInApp ? <Tag tone="success">В приложении</Tag> : <Tag>Скрыт</Tag>}</div></div>
+              <div><div className="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-400">Приём заказов</div><div className="mt-2">{details?.isAcceptingOrders ? <Tag tone="blue">Принимает</Tag> : <Tag>Остановлен</Tag>}</div></div>
+            </div>
+            {details?.descriptionRu ? <div className="mt-5 border-t border-slate-100 pt-4"><div className="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-400">Описание</div><p className="mt-2 text-[13px] font-medium leading-6 text-slate-600">{details.descriptionRu}</p></div> : null}
+          </div>
+        </section>
+
+        <Section
+          title="Период"
+          subtitle="Показатели и графики ниже рассчитываются для выбранных дат."
+          right={<Button onClick={() => void loadMetrics()} disabled={metricsLoading}><RefreshCw className={`h-4 w-4 ${metricsLoading ? 'animate-spin' : ''}`} /> Обновить</Button>}
+        >
+          <div className="flex flex-wrap items-end gap-3 p-5">
+            <div className="flex gap-2"><Button onClick={() => applyPreset(7)}>7 дней</Button><Button onClick={() => applyPreset(30)}>30 дней</Button><Button onClick={() => applyPreset(90)}>90 дней</Button></div>
+            <label><span className="mb-1.5 block text-[11px] font-bold text-slate-500">С даты</span><input type="date" value={from} onChange={(event) => setFrom(event.target.value)} className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-semibold outline-none" /></label>
+            <label><span className="mb-1.5 block text-[11px] font-bold text-slate-500">По дату</span><input type="date" value={to} onChange={(event) => setTo(event.target.value)} className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-semibold outline-none" /></label>
+            {metrics?.period ? <div className="pb-2 text-[12px] font-medium text-slate-400">{metrics.period.days} дней</div> : null}
+          </div>
+        </Section>
+
+        {metricsError ? <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] font-semibold text-amber-800">{metricsError}</div> : null}
+
+        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
+            <Kpi label="Выручка" value={money(safe.revenue)} note={`Средний чек: ${money(safe.avgCheck)}`} />
+            <Kpi label="Заказы" value={safe.orders} note={`Доставлено: ${safe.delivered}`} />
+            <Kpi label="Оплачено" value={safe.paid} note={percent(safe.paidRate)} />
+            <Kpi label="Отмены" value={safe.canceled} note={percent(safe.cancelRate)} />
+            <Kpi label="Клиенты" value={safe.clients} note={`Новых: ${safe.newClients}`} />
+            <Kpi label="Рейтинг" value={safe.rating == null ? '—' : safe.rating.toFixed(1)} note={`Отзывов: ${safe.reviews}`} />
+          </div>
+        </section>
+
+        <div className="grid gap-4 xl:grid-cols-2">
+          <Section title="Выручка по дням" subtitle="Сумма за каждый день выбранного периода.">
+            {metrics?.daily?.length ? <LineChart data={metrics.daily} valueKey="revenue" formatValue={money} /> : <div className="p-10 text-center text-[13px] font-medium text-slate-400">За выбранный период данных нет.</div>}
+          </Section>
+          <Section title="Заказы по дням" subtitle="Количество заказов за каждый день.">
+            {metrics?.daily?.length ? <LineChart data={metrics.daily} valueKey="orders" formatValue={(value) => String(Math.round(value))} /> : <div className="p-10 text-center text-[13px] font-medium text-slate-400">За выбранный период данных нет.</div>}
+          </Section>
         </div>
-        {headerRight}
+
+        <Section title="Клиенты" subtitle="Активность и возврат клиентов за выбранный период.">
+          <div className="grid grid-cols-2 divide-x divide-slate-200 md:grid-cols-5">
+            <Kpi label="Активные" value={safe.clients} />
+            <Kpi label="За 7 дней" value={safe.clients7} />
+            <Kpi label="За 30 дней" value={safe.clients30} />
+            <Kpi label="Новые" value={safe.newClients} />
+            <Kpi label="Возврат" value={percent(safe.repeatRate)} />
+          </div>
+        </Section>
+
+        {metrics?.suggestions?.length ? (
+          <Section title="Рекомендации" subtitle="Подсказки, рассчитанные по текущим показателям.">
+            <div className="divide-y divide-slate-100">
+              {metrics.suggestions.map((item, index) => <div key={`${item.title}-${index}`} className="px-5 py-4"><div className="text-[13px] font-black text-slate-900">{item.title}</div><div className="mt-1 text-[12px] font-medium leading-5 text-slate-500">{item.text}</div></div>)}
+            </div>
+          </Section>
+        ) : null}
+
+        <Section title="Последние заказы" subtitle="Нажмите на строку, чтобы открыть заказ." right={<Button onClick={() => router.push(`/layout-20/orders?restaurantId=${encodeURIComponent(id)}`)}>Все заказы <ArrowRight className="h-4 w-4" /></Button>}>
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead><tr className="border-b border-slate-200 bg-slate-50 text-left text-[10px] font-black uppercase tracking-[0.08em] text-slate-400"><th className="px-5 py-3">Дата</th><th className="px-5 py-3">Статус</th><th className="px-5 py-3">Оплата</th><th className="px-5 py-3">Сумма</th><th className="px-5 py-3">Клиент</th></tr></thead>
+              <tbody>
+                {metrics?.recentOrders?.length ? metrics.recentOrders.map((order) => <tr key={order.id} onClick={() => router.push(`/layout-20/orders/${order.id}`)} className="cursor-pointer border-b border-slate-100 text-[12px] font-semibold text-slate-700 hover:bg-slate-50 last:border-b-0"><td className="px-5 py-3.5">{dateTime(order.createdAt)}</td><td className="px-5 py-3.5">{orderStatus(order.status)}</td><td className="px-5 py-3.5">{paymentStatus(order.paymentStatus)}{paymentMethod(order.paymentMethod) ? ` · ${paymentMethod(order.paymentMethod)}` : ''}</td><td className="px-5 py-3.5 font-black text-slate-950">{money(order.total)}</td><td className="px-5 py-3.5">{order.userName || order.userPhone || 'Не указан'}</td></tr>) : <tr><td colSpan={5} className="px-5 py-10 text-center text-[13px] font-medium text-slate-400">За выбранный период заказов нет.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+
+        <Section title="Постоянные клиенты" subtitle="Клиенты с наибольшей активностью и суммой заказов.">
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead><tr className="border-b border-slate-200 bg-slate-50 text-left text-[10px] font-black uppercase tracking-[0.08em] text-slate-400"><th className="px-5 py-3">Клиент</th><th className="px-5 py-3">Телефон</th><th className="px-5 py-3">Заказов</th><th className="px-5 py-3">Потрачено</th><th className="px-5 py-3">Последний заказ</th></tr></thead>
+              <tbody>
+                {metrics?.topClients?.length ? metrics.topClients.map((client) => <tr key={client.userId} className="border-b border-slate-100 text-[12px] font-semibold text-slate-700 last:border-b-0"><td className="px-5 py-3.5 font-bold text-slate-900">{client.name || 'Без имени'}</td><td className="px-5 py-3.5">{client.phone || '—'}</td><td className="px-5 py-3.5">{client.ordersCount}</td><td className="px-5 py-3.5 font-black text-slate-950">{money(client.spent)}</td><td className="px-5 py-3.5">{dateTime(client.lastOrderAt)}</td></tr>) : <tr><td colSpan={5} className="px-5 py-10 text-center text-[13px] font-medium text-slate-400">Данных пока нет.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </Section>
       </div>
-
-      {err && <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-lg text-red-700">{err}</div>}
-      {restaurantErr && (
-        <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-lg text-red-700">{restaurantErr}</div>
-      )}
-
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <Panel
-          title="Изображение ресторана"
-          subtitle="Загрузить обложку"
-          className="xl:col-span-1"
-          right={
-            <button
-              className="btn btn-light"
-              style={{ borderRadius: 12 }}
-              onClick={() => fileInputRef.current?.click()}
-              type="button"
-            >
-              Загрузить
-            </button>
-          }
-        >
-          <div className="space-y-4">
-            <div className="rounded-2xl overflow-hidden border border-slate-200 bg-slate-100">
-              <div className="aspect-[16/9] w-full">
-                {coverPreview ? (
-                  <img
-                    src={coverPreview}
-                    alt="preview"
-                    className="w-full h-full object-cover block"
-                  />
-                ) : restaurantDetails?.coverImageUrl ? (
-                  <img
-                    src={absUploadUrl(restaurantDetails.coverImageUrl)}
-                    alt={restaurantDetails.nameRu || 'restaurant-cover'}
-                    className="w-full h-full object-cover block"
-                  />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-slate-400 text-lg font-semibold">
-                    Нет изображения
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
-              className="hidden"
-              onChange={(e) => onPickCoverFile(e.target.files?.[0] || null)}
-            />
-
-            <div className="flex flex-wrap gap-3">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="btn btn-light-primary"
-                style={{ borderRadius: 12 }}
-              >
-                {restaurantDetails?.coverImageUrl ? 'Загрузить обложку' : 'Загрузить обложку'}
-              </button>
-
-              <button
-                type="button"
-                onClick={uploadCover}
-                disabled={!coverFile || coverUploading}
-                className="btn btn-primary"
-                style={{ borderRadius: 12 }}
-              >
-                {coverUploading ? 'Загрузка...' : 'Загрузить'}
-              </button>
-            </div>
-
-            <div className="text-sm text-slate-500">
-              Поддерживаются JPG, JPEG, PNG, WEBP. Максимальный размер: 10 MB.
-            </div>
-
-            {coverFile ? (
-              <div className="rounded-xl bg-slate-100 border border-slate-200 px-4 py-3 text-sm">
-                Выбран файл: <span className="font-semibold">{coverFile.name}</span>
-              </div>
-            ) : null}
-
-            {coverUploadMsg ? (
-              <div
-                className={`rounded-xl px-4 py-3 text-sm border ${
-                  coverUploadMsg.toLowerCase().includes('ошибка')
-                    ? 'bg-red-50 border-red-200 text-red-700'
-                    : 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                }`}
-              >
-                {coverUploadMsg}
-              </div>
-            ) : null}
-
-            {restaurantLoading ? (
-              <div className="text-sm text-slate-500">Загрузка данных ресторана...</div>
-            ) : null}
-
-            {restaurantDetails?.coverImageUrl ? (
-              <div className="text-sm text-slate-500 break-all">
-                URL: {restaurantDetails.coverImageUrl}
-              </div>
-            ) : null}
-          </div>
-        </Panel>
-
-        <Panel
-          title={
-            <div className="flex items-center gap-3">
-              <span className="text-2xl font-extrabold">
-                {restaurantDetails?.nameRu || metrics?.restaurant?.nameRu || '—'}
-              </span>
-              <span className="badge badge-light-primary" style={{ fontSize: 14, padding: '8px 10px' }}>
-                {restaurantDetails?.status || metrics?.restaurant?.status || '—'}
-              </span>
-            </div>
-          }
-          subtitle={
-            <div className="space-y-2">
-              <div>
-                Slug:{' '}
-                <span className="font-semibold text-black">
-                  {restaurantDetails?.slug || metrics?.restaurant?.slug || '—'}
-                </span>
-              </div>
-              <div>Номер: {restaurantDetails?.number || metrics?.restaurant?.number || '—'}</div>
-              <div>Телефон: {restaurantDetails?.phone || '—'}</div>
-              <div>Адрес: {restaurantDetails?.address || '—'}</div>
-              <div>Время работы: {restaurantDetails?.workingHours || '—'}</div>
-            </div>
-          }
-          className="xl:col-span-2"
-        >
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="rounded-xl border border-slate-200 p-4 bg-black/[0.02]">
-              <div className="text-base opacity-70">Название RU</div>
-              <div className="text-lg font-semibold mt-2 whitespace-pre-wrap">
-                {restaurantDetails?.descriptionRu || '—'}
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 p-4 bg-black/[0.02]">
-              <div className="text-base opacity-70">Название KK</div>
-              <div className="text-lg font-semibold mt-2 whitespace-pre-wrap">
-                {restaurantDetails?.descriptionKk || '—'}
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 p-4 bg-black/[0.02]">
-              <div className="text-base opacity-70">Рейтинг</div>
-              <div className="text-3xl font-extrabold mt-1">
-                {restaurantDetails?.ratingAvg ?? 0} ★
-              </div>
-              <div className="text-base opacity-70 mt-2">
-                отзывов: {restaurantDetails?.ratingCount ?? 0}
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 p-4 bg-black/[0.02]">
-              <div className="text-base opacity-70">Комиссия ресторана</div>
-              <div className="text-3xl font-extrabold mt-1">
-                {restaurantDetails?.effectiveRestaurantCommissionPct ?? 0}%
-              </div>
-              <div className="text-base opacity-70 mt-2">
-                Индивидуальная комиссия: {restaurantDetails?.restaurantCommissionPctOverride ?? 'Используется комиссия по умолчанию'}
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 p-4 bg-black/[0.02]">
-              <div className="text-base opacity-70">В приложении</div>
-
-              <div className="flex items-center gap-3 mt-3">
-                <input
-                  type="checkbox"
-                  checked={restaurantDetails?.isPinned || false}
-                  onChange={async (e) => {
-                    const checked = e.target.checked;
-
-                    try {
-                      const updated = await apiFetch<RestaurantDetails>(`/restaurants/${id}/pinned`, {
-                        method: 'PATCH',
-                        body: JSON.stringify({
-                          isPinned: checked,
-                          sortOrder: 1,
-                        }),
-                      });
-
-                      setRestaurantDetails((prev) => ({
-                        ...(prev || {}),
-                        ...updated,
-                      }));
-                    } catch (err) {
-                      alert('Не удалось сохранить изменения');
-                    }
-                  }}
-                />
-
-                <span className="text-lg font-semibold">
-                  {restaurantDetails?.isPinned ? 'Открепить' : 'Закрепить'}
-                </span>
-              </div>
-
-              <div className="text-sm text-slate-500 mt-2">
-                Если включено, ресторан будет показываться в приложении
-              </div>
-            </div>
-          </div>
-        </Panel>
-      </div>
-
-      {metrics?.restaurant ? (
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-          <Panel
-            title={
-              <div className="flex items-center gap-3">
-                <span className="text-2xl font-extrabold">{metrics.restaurant.nameRu}</span>
-                <span className="badge badge-light-primary" style={{ fontSize: 14, padding: '8px 10px' }}>
-                  {metrics.restaurant.status}
-                </span>
-              </div>
-            }
-            subtitle={
-              <div className="space-y-2">
-                <div>
-                  slug: <span className="font-semibold text-black">{metrics.restaurant.slug}</span>
-                </div>
-                <div>№ ресторана: {metrics.restaurant.number}</div>
-              </div>
-            }
-            className="xl:col-span-1"
-          >
-            <div className="grid grid-cols-2 gap-4">
-              <div className="rounded-xl border border-slate-200 p-4 bg-black/[0.02]">
-                <div className="text-base opacity-70">Заказы</div>
-                <div className="text-3xl font-extrabold mt-1">{safe.totalOrders}</div>
-                <div className="text-base opacity-70 mt-2">
-                  ✅ {safe.deliveredCount} · ❌ {safe.canceledCount}
-                </div>
-              </div>
-              <div className="rounded-xl border border-slate-200 p-4 bg-black/[0.02]">
-                <div className="text-base opacity-70">Оплачено</div>
-                <div className="text-3xl font-extrabold mt-1">{safe.paidRate}%</div>
-                <div className="text-base opacity-70 mt-2">шт: {safe.paidCount}</div>
-              </div>
-            </div>
-          </Panel>
-
-          <Panel
-            title={
-              <div className="flex items-center gap-3 flex-wrap">
-                <span>Период аналитики</span>
-                {metrics?.period ? (
-                  <span className="px-3 py-1 rounded-full bg-blue-100 text-blue-700 text-base font-semibold">
-                    {new Date(metrics.period.from).toLocaleDateString('ru-RU')} —{' '}
-                    {new Date(metrics.period.to).toLocaleDateString('ru-RU')} ({metrics.period.days} дн.)
-                  </span>
-                ) : null}
-              </div>
-            }
-            right={
-              <span className="px-4 py-2 rounded-xl bg-slate-200 text-slate-700 text-base font-semibold">
-                Фильтр
-              </span>
-            }
-            className="xl:col-span-2"
-          >
-            <div className="space-y-6">
-              <div className="p-5 rounded-2xl bg-slate-100 border border-slate-200">
-                <div className="flex items-center justify-between gap-4 mb-4">
-                  <div className="text-xl font-extrabold">Быстрый выбор</div>
-                  <div className="text-base opacity-70">Пресеты (7 / 30 / 90)</div>
-                </div>
-
-                <div className="flex flex-wrap gap-4">
-                  {[7, 30, 90].map((d) => {
-                    const active = activePreset === d;
-                    return (
-                      <button
-                        key={d}
-                        onClick={() => applyPreset(d)}
-                        className={`px-6 py-3 rounded-2xl text-lg font-extrabold transition-all border ${
-                          active
-                            ? 'bg-emerald-600 text-white border-emerald-700 shadow-md'
-                            : 'bg-white text-slate-900 border-slate-300 hover:bg-slate-50'
-                        }`}
-                        title={`Выбрать период ${d} дней`}
-                      >
-                        {d} дней
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="p-5 rounded-2xl bg-white border border-slate-200">
-                <div className="flex items-center justify-between gap-4 mb-4">
-                  <div className="text-xl font-extrabold">Произвольный диапазон</div>
-                  <div className="text-base opacity-70">Выбери даты вручную</div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <div className="text-base font-semibold mb-2">С даты</div>
-                    <input
-                      type="date"
-                      value={from}
-                      onChange={(e) => setFrom(e.target.value)}
-                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-lg focus:outline-none focus:ring-2 focus:ring-blue-400"
-                    />
-                  </div>
-
-                  <div>
-                    <div className="text-base font-semibold mb-2">По дату</div>
-                    <input
-                      type="date"
-                      value={to}
-                      onChange={(e) => setTo(e.target.value)}
-                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-lg focus:outline-none focus:ring-2 focus:ring-blue-400"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="px-4 py-3 rounded-2xl bg-blue-50 border border-blue-200 text-base text-blue-800">
-                Период влияет на метрики и графики. Пресет активен только если «по дату» = сегодня.
-              </div>
-            </div>
-          </Panel>
-        </div>
-      ) : null}
-
-      {metrics ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
-          <StatCard
-            theme="green"
-            icon="₸"
-            title="Выручка (итого)"
-            value={fmtMoney(safe.revenueTotal)}
-            hint={
-              <span>
-                Средний чек: <b>{fmtMoney(safe.avgCheck)}</b>
-              </span>
-            }
-            right={
-              safe.trend == null ? (
-                '—'
-              ) : (
-                <span className="inline-flex items-center gap-2">
-                  <span className="opacity-90">тренд</span> <b>{safe.trend}%</b>
-                </span>
-              )
-            }
-          />
-
-          <StatCard
-            theme="blue"
-            icon="🧾"
-            title="Заказы"
-            value={safe.totalOrders.toLocaleString('ru-RU')}
-            hint={
-              <span>
-                Доставлено: <b>{safe.deliveredCount}</b> · Отменено: <b>{safe.canceledCount}</b>
-              </span>
-            }
-          />
-
-          <StatCard
-            theme="teal"
-            icon="💳"
-            title="Оплаты"
-            value={`${safe.paidRate}%`}
-            hint={
-              <span>
-                Оплачено: <b>{safe.paidCount}</b>
-              </span>
-            }
-          />
-
-          <StatCard
-            theme="red"
-            icon="⛔"
-            title="Отмены"
-            value={`${safe.cancelRate}%`}
-            hint={
-              <span>
-                Отменено: <b>{safe.canceledCount}</b>
-              </span>
-            }
-          />
-        </div>
-      ) : null}
-
-      {metrics ? (
-        <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-5">
-          <StatCard
-            theme="purple"
-            icon="👥"
-            title="Клиенты"
-            value={safe.activeCustomers.toLocaleString('ru-RU')}
-            hint={
-              <span>
-                Новых: <b>{safe.newCustomers}</b> · Повторы: <b>{safe.repeatRate}%</b>
-              </span>
-            }
-          />
-          <StatCard theme="gray" icon="7d" title="Активные 7 дней" value={safe.activeCustomers7d} hint="уникальных" />
-          <StatCard theme="gray" icon="30d" title="Активные 30 дней" value={safe.activeCustomers30d} hint="уникальных" />
-          <StatCard
-            theme="orange"
-            icon="★"
-            title="Рейтинг"
-            value={safe.ratingAvg == null ? '—' : `${safe.ratingAvg} ★`}
-            hint={
-              <span>
-                Отзывов: <b>{safe.reviewsCount}</b> · {safe.reviewRate}% от доставок
-              </span>
-            }
-            right={
-              <button
-                className="btn btn-lg btn-light"
-                onClick={() => router.push(reviewsUrl)}
-                style={{ borderRadius: 14 }}
-              >
-                Открыть
-              </button>
-            }
-          />
-          <StatCard theme="blue" icon="📦" title="Доставлено" value={safe.deliveredCount} hint="шт. за период" />
-        </div>
-      ) : null}
-
-      {metrics ? (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-          <Panel
-            title="Выручка по дням"
-            subtitle="DELIVERED + PAID. Наведи на линию — увидишь дату и сумму."
-            right={
-              <span className="badge badge-light-success" style={{ fontSize: 14, padding: '8px 10px' }}>
-                Revenue
-              </span>
-            }
-          >
-            <NiceLineChart
-              data={metrics.daily || []}
-              valueKey="revenue"
-              title=""
-              height={230}
-              formatValue={(v) => fmtMoney(v)}
-            />
-          </Panel>
-
-          <Panel
-            title="Заказы по дням"
-            subtitle="Наведи на линию — увидишь дату и количество заказов."
-            right={
-              <span className="badge badge-light-primary" style={{ fontSize: 14, padding: '8px 10px' }}>
-                Orders
-              </span>
-            }
-          >
-            <NiceLineChart
-              data={metrics.daily || []}
-              valueKey="orders"
-              title=""
-              height={230}
-              formatValue={(v) => `${Math.round(v).toLocaleString('ru-RU')}`}
-            />
-          </Panel>
-        </div>
-      ) : null}
-
-      {metrics ? (
-        <Panel
-          tone="muted"
-          title="Советы"
-          subtitle="Автоматические подсказки по цифрам"
-          right={
-            <span className="badge badge-light-primary" style={{ fontSize: 14, padding: '8px 10px' }}>
-              AI hints
-            </span>
-          }
-        >
-          {metrics.suggestions?.length ? (
-            <div className="space-y-3">
-              {metrics.suggestions.map((s, idx) => (
-                <div key={idx} className="rounded-2xl border border-slate-200 p-4 bg-black/[0.01]">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <span className={badgeBySuggestionType(s.type)} style={{ fontSize: 14, padding: '8px 10px' }}>
-                      {s.title}
-                    </span>
-                    <span className="text-lg opacity-80">{s.text}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-lg opacity-70">Пока нет рекомендаций</div>
-          )}
-        </Panel>
-      ) : null}
-
-      {metrics ? (
-        <Panel
-          title={
-            <div className="flex items-center gap-3">
-              <span>Последние заказы</span>
-              <span className="badge badge-light-primary" style={{ fontSize: 14, padding: '8px 10px' }}>
-                {(metrics.recentOrders || []).length}
-              </span>
-            </div>
-          }
-          subtitle="Кликабельно → открывает заказ"
-          right={
-            <div className="flex items-center gap-3">
-              <button
-                className="btn btn-lg btn-light"
-                onClick={() => setOrdersOpen((v) => !v)}
-                style={{ borderRadius: 14 }}
-              >
-                {ordersOpen ? 'Свернуть' : 'Развернуть'}
-              </button>
-              <button
-                className="btn btn-lg btn-light"
-                onClick={() => router.push('/layout-20/orders')}
-                style={{ borderRadius: 14 }}
-              >
-                Все заказы →
-              </button>
-            </div>
-          }
-        >
-          {ordersOpen ? (
-            <div className="overflow-auto rounded-2xl border border-slate-200 bg-white">
-              <table className="min-w-[1200px] w-full text-base">
-                <thead className="bg-black/5 sticky top-0">
-                  <tr>
-                    <th className="text-left p-4">ID</th>
-                    <th className="text-left p-4">Дата</th>
-                    <th className="text-left p-4">Статус</th>
-                    <th className="text-left p-4">Оплата</th>
-                    <th className="text-left p-4">Сумма</th>
-                    <th className="text-left p-4">Клиент</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {(metrics.recentOrders || []).map((o, idx) => (
-                    <tr
-                      key={o.id}
-                      className={`border-t hover:bg-black/5 cursor-pointer ${
-                        idx % 2 ? 'bg-black/[0.01]' : ''
-                      }`}
-                      onClick={() => router.push(`/layout-20/orders/${o.id}`)}
-                      title="Открыть заказ"
-                    >
-                      <td className="p-4 font-mono text-sm">{o.id}</td>
-                      <td className="p-4">{fmtDateTime(o.createdAt)}</td>
-                      <td className="p-4">
-                        <span className={statusBadge(o.status)} style={{ fontSize: 14, padding: '8px 10px' }}>
-                          {o.status}
-                        </span>
-                      </td>
-                      <td className="p-4">
-                        <span
-                          className={statusBadge(o.paymentStatus)}
-                          style={{ fontSize: 14, padding: '8px 10px' }}
-                        >
-                          {o.paymentStatus}
-                        </span>
-                        <span className="text-base opacity-70 ml-3">{o.paymentMethod || '—'}</span>
-                      </td>
-                      <td className="p-4 font-extrabold">{fmtMoney(o.total)}</td>
-                      <td className="p-4">
-                        <div className="flex flex-col">
-                          <span className="font-extrabold">{o.userName || o.userId}</span>
-                          <span className="text-base opacity-70">{o.userPhone || '—'}</span>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-
-                  {(metrics.recentOrders || []).length === 0 && (
-                    <tr>
-                      <td className="p-6 opacity-70 text-lg" colSpan={6}>
-                        Нет заказов за выбранный период
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="text-lg opacity-70">Список заказов свернут</div>
-          )}
-        </Panel>
-      ) : null}
-
-      {metrics ? (
-        <Panel
-          tone="muted"
-          title={
-            <div className="flex items-center gap-3">
-              <span>ТОП клиенты</span>
-              <span className="badge badge-light-primary" style={{ fontSize: 14, padding: '8px 10px' }}>
-                {(metrics.topClients || []).length}
-              </span>
-            </div>
-          }
-          subtitle="Кликабельно → профиль клиента"
-          right={
-            <button
-              className="btn btn-lg btn-light"
-              onClick={() => setClientsOpen((v) => !v)}
-              style={{ borderRadius: 14 }}
-            >
-              {clientsOpen ? 'Свернуть' : 'Развернуть'}
-            </button>
-          }
-        >
-          {clientsOpen ? (
-            <div className="overflow-auto rounded-2xl border border-slate-200 bg-white">
-              <table className="min-w-[1100px] w-full text-base">
-                <thead className="bg-black/5 sticky top-0">
-                  <tr>
-                    <th className="text-left p-4">Клиент</th>
-                    <th className="text-left p-4">Телефон</th>
-                    <th className="text-left p-4">Статус</th>
-                    <th className="text-left p-4">Заказов</th>
-                    <th className="text-left p-4">Потрачено</th>
-                    <th className="text-left p-4">Последний заказ</th>
-                    <th className="text-left p-4">Дней с последнего</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {(metrics.topClients || []).map((u, idx) => (
-                    <tr
-                      key={u.userId}
-                      className={`border-t cursor-pointer hover:bg-black/5 ${
-                        idx % 2 ? 'bg-black/[0.01]' : ''
-                      }`}
-                      onClick={() => router.push(`/layout-20/users/${u.userId}`)}
-                      title="Открыть клиента"
-                    >
-                      <td className="p-4 font-extrabold">{u.name || u.userId}</td>
-                      <td className="p-4">{u.phone || '—'}</td>
-                      <td className="p-4">{u.status}</td>
-                      <td className="p-4 font-semibold">{u.ordersCount}</td>
-                      <td className="p-4 font-extrabold">{fmtMoney(u.spent)}</td>
-                      <td className="p-4">{fmtDateTime(u.lastOrderAt)}</td>
-                      <td className="p-4 font-semibold">{u.recencyDays ?? '—'}</td>
-                    </tr>
-                  ))}
-
-                  {(metrics.topClients || []).length === 0 && (
-                    <tr>
-                      <td className="p-6 opacity-70 text-lg" colSpan={7}>
-                        Нет данных
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="text-lg opacity-70">Список клиентов свернут</div>
-          )}
-        </Panel>
-      ) : null}
     </div>
   );
 }
-
