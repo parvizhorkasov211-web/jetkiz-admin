@@ -38,34 +38,54 @@ function safeJson(text: string) {
 }
 
 function getErrorMessage(data: unknown, status: number): string {
+  let rawMessage = "";
+
   if (data && typeof data === "object") {
     const record = data as Record<string, unknown>;
 
     const message = record.message;
     if (Array.isArray(message)) {
-      return message.join("; ");
+      rawMessage = message.join("; ");
     }
 
-    if (typeof message === "string" && message.trim()) {
-      return message;
+    if (!rawMessage && typeof message === "string" && message.trim()) {
+      rawMessage = message;
     }
 
     const error = record.error;
-    if (typeof error === "string" && error.trim()) {
-      return error;
+    if (!rawMessage && typeof error === "string" && error.trim()) {
+      rawMessage = error;
     }
 
     const raw = record.raw;
-    if (typeof raw === "string" && raw.trim()) {
-      return raw;
+    if (!rawMessage && typeof raw === "string" && raw.trim()) {
+      rawMessage = raw;
     }
   }
 
-  if (typeof data === "string" && data.trim()) {
-    return data;
+  if (!rawMessage && typeof data === "string" && data.trim()) {
+    rawMessage = data;
   }
 
-  return `HTTP ${status}`;
+  const normalized = rawMessage.trim().toLowerCase();
+  const exact: Record<string, string> = {
+    "database request failed": "Не удалось получить данные из базы. Проверьте миграции backend.",
+    forbidden: "Недостаточно прав для выполнения этого действия.",
+    unauthorized: "Сессия истекла. Войдите в админку заново.",
+    "order not found": "Заказ не найден.",
+    "courier not found": "Курьер не найден.",
+    "courier is not assigned": "Курьер ещё не назначен.",
+  };
+
+  if (exact[normalized]) return exact[normalized];
+  if (status === 400) return "Backend отклонил запрос. Проверьте введённые данные.";
+  if (status === 401) return "Сессия истекла. Войдите в админку заново.";
+  if (status === 403) return "Недостаточно прав для выполнения этого действия.";
+  if (status === 404) return "Запрошенные данные не найдены.";
+  if (status === 409) return "Действие конфликтует с текущим состоянием данных. Обновите страницу.";
+  if (status >= 500) return "Ошибка backend. Повторите попытку или проверьте журнал сервера.";
+
+  return rawMessage || `Ошибка запроса (${status})`;
 }
 
 export async function apiFetch<T = unknown>(
@@ -96,7 +116,7 @@ export async function apiFetch<T = unknown>(
       error instanceof Error ? error.message : error,
     );
 
-    throw new Error("API connection failed");
+    throw new Error("Нет связи с backend. Проверьте, что сервер запущен.");
   }
 
   const text = await response.text();
