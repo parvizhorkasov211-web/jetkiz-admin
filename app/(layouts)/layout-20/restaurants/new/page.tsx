@@ -2,6 +2,7 @@
 
 import { ArrowLeft, Building2, Clock3, MapPin, Phone, Save, Store, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
@@ -72,18 +73,22 @@ function createErrorMessage(error: unknown): string {
   if (message.includes('namekk')) return 'Укажите название на казахском языке.';
   if (message.includes('phone')) return 'Проверьте номер телефона.';
   if (message.includes('workinghours')) return 'Проверьте время работы.';
-  if (message.includes('already exists') || message.includes('unique')) return 'Такая запись уже существует. Проверьте введённые данные.';
+  if (message.includes('already exists') || message.includes('unique')) {
+    return 'Такая запись уже существует. Проверьте введённые данные.';
+  }
 
   if (status === 400) return 'Проверьте заполненные поля и повторите попытку.';
   if (status === 401) return 'Сессия истекла. Войдите снова.';
   if (status === 403) return 'У вас нет прав для создания ресторана.';
   if (status === 409) return 'Такая запись уже существует или данные изменились.';
-  if (status !== null && status >= 500) return 'Сервис временно недоступен. Повторите попытку позже.';
+  if (status !== null && status >= 500) {
+    return 'Сервис временно недоступен. Повторите попытку позже.';
+  }
 
   return 'Не удалось создать ресторан. Повторите попытку.';
 }
 
-function FieldLabel({ children, required = false }: { children: React.ReactNode; required?: boolean }) {
+function FieldLabel({ children, required = false }: { children: ReactNode; required?: boolean }) {
   return (
     <label className="mb-2 block text-[13px] font-black text-slate-700">
       {children}
@@ -138,8 +143,12 @@ export default function NewRestaurantPage() {
     '';
   const fromRestaurantId = searchParams.get('fromRestaurantId') ?? '';
 
-  const isBranchMode = mode === 'branch' || Boolean(ownerPhoneFromQuery) || Boolean(fromRestaurantId);
-  const fixedOwnerPhone = useMemo(() => formatPhone(ownerPhoneFromQuery), [ownerPhoneFromQuery]);
+  const isBranchMode =
+    mode === 'branch' || Boolean(ownerPhoneFromQuery) || Boolean(fromRestaurantId);
+  const fixedOwnerPhone = useMemo(
+    () => formatPhone(ownerPhoneFromQuery),
+    [ownerPhoneFromQuery],
+  );
 
   const [form, setForm] = useState<FormState>(() => ({
     ...initialForm,
@@ -163,9 +172,18 @@ export default function NewRestaurantPage() {
   const validate = (): boolean => {
     const next: FieldErrors = {};
 
-    if (!isPhoneComplete(form.ownerPhone)) next.ownerPhone = 'Укажите полный номер владельца.';
-    if (form.restaurantPhone.trim() && !isPhoneComplete(form.restaurantPhone)) {
-      next.restaurantPhone = 'Укажите полный номер ресторана или оставьте поле пустым.';
+    if (!isPhoneComplete(form.ownerPhone)) {
+      next.ownerPhone = isBranchMode
+        ? 'Укажите полный номер владельца.'
+        : 'Укажите полный номер владельца и ресторана.';
+    }
+    if (
+      isBranchMode &&
+      form.restaurantPhone.trim() &&
+      !isPhoneComplete(form.restaurantPhone)
+    ) {
+      next.restaurantPhone =
+        'Укажите полный номер ресторана или оставьте поле пустым.';
     }
     if (!form.nameRu.trim()) next.nameRu = 'Укажите название на русском языке.';
     if (!form.nameKk.trim()) next.nameKk = 'Укажите название на казахском языке.';
@@ -184,9 +202,10 @@ export default function NewRestaurantPage() {
       setPageError(null);
 
       const ownerPhone = normalizePhoneDigits(form.ownerPhone);
-      const restaurantPhone = form.restaurantPhone.trim()
-        ? normalizePhoneDigits(form.restaurantPhone)
-        : ownerPhone;
+      const restaurantPhone =
+        isBranchMode && form.restaurantPhone.trim()
+          ? normalizePhoneDigits(form.restaurantPhone)
+          : ownerPhone;
 
       const payload = {
         nameRu: form.nameRu.trim(),
@@ -232,7 +251,11 @@ export default function NewRestaurantPage() {
 
         <div className="mb-5 flex items-start gap-4">
           <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-violet-100 text-violet-700">
-            {isBranchMode ? <Building2 className="h-6 w-6" /> : <Store className="h-6 w-6" />}
+            {isBranchMode ? (
+              <Building2 className="h-6 w-6" />
+            ) : (
+              <Store className="h-6 w-6" />
+            )}
           </div>
           <div>
             <h1 className="text-[28px] font-black tracking-tight text-slate-950">
@@ -247,13 +270,18 @@ export default function NewRestaurantPage() {
         </div>
 
         <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-[13px] font-bold leading-5 text-violet-800">
-          Новый ресторан создаётся скрытым и без приёма заказов. Показ в приложении и приём заказов включаются отдельно после проверки.
+          Новый ресторан создаётся скрытым и без приёма заказов. Показ в приложении и
+          приём заказов включаются отдельно после проверки.
         </div>
 
         {pageError && (
           <div className="mt-4 flex items-start justify-between gap-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-[13px] font-bold text-red-700">
             <span>{pageError}</span>
-            <button type="button" onClick={() => setPageError(null)} aria-label="Закрыть сообщение">
+            <button
+              type="button"
+              onClick={() => setPageError(null)}
+              aria-label="Закрыть сообщение"
+            >
               <X className="h-4 w-4" />
             </button>
           </div>
@@ -263,61 +291,99 @@ export default function NewRestaurantPage() {
           <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-[0_12px_35px_rgba(15,23,42,0.05)]">
             <div className="mb-4">
               <div className="text-[16px] font-black text-slate-950">Владелец и связь</div>
-              <div className="mt-1 text-[12px] font-semibold text-slate-500">Номер владельца используется для привязки ресторана к его аккаунту.</div>
+              <div className="mt-1 text-[12px] font-semibold text-slate-500">
+                {isBranchMode
+                  ? 'Номер владельца определяет, к какой группе филиалов относится ресторан.'
+                  : 'Для первого ресторана этот номер используется и как номер владельца, и как номер ресторана. После создания номер ресторана можно изменить отдельно.'}
+              </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className={`grid gap-4 ${isBranchMode ? 'sm:grid-cols-2' : 'grid-cols-1'}`}>
               <div>
-                <FieldLabel required>Телефон владельца</FieldLabel>
-                <div className="relative">
-                  <Phone className="pointer-events-none absolute left-3.5 top-[14px] h-4 w-4 text-slate-400" />
-                  <div className="pl-0">
-                    <input
-                      type="tel"
-                      inputMode="numeric"
-                      value={form.ownerPhone}
-                      disabled={isBranchMode && Boolean(fixedOwnerPhone)}
-                      placeholder="+7 (___) ___-__-__"
-                      onChange={(event) => setField('ownerPhone', formatPhone(event.target.value))}
-                      className={`h-11 w-full rounded-xl border bg-white pl-10 pr-3.5 text-[14px] font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500 ${errors.ownerPhone ? 'border-red-300 focus:ring-4 focus:ring-red-50' : 'border-slate-200 focus:border-violet-300 focus:ring-4 focus:ring-violet-100'}`}
-                    />
-                    {errors.ownerPhone && <div className="mt-1.5 text-[12px] font-bold text-red-600">{errors.ownerPhone}</div>}
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <FieldLabel>Телефон ресторана</FieldLabel>
+                <FieldLabel required>
+                  {isBranchMode ? 'Телефон владельца' : 'Телефон владельца и ресторана'}
+                </FieldLabel>
                 <div className="relative">
                   <Phone className="pointer-events-none absolute left-3.5 top-[14px] h-4 w-4 text-slate-400" />
                   <input
                     type="tel"
                     inputMode="numeric"
-                    value={form.restaurantPhone}
-                    placeholder="Если пусто — номер владельца"
-                    onChange={(event) => setField('restaurantPhone', formatPhone(event.target.value))}
-                    className={`h-11 w-full rounded-xl border bg-white pl-10 pr-3.5 text-[14px] font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 ${errors.restaurantPhone ? 'border-red-300 focus:ring-4 focus:ring-red-50' : 'border-slate-200 focus:border-violet-300 focus:ring-4 focus:ring-violet-100'}`}
+                    value={form.ownerPhone}
+                    disabled={isBranchMode && Boolean(fixedOwnerPhone)}
+                    placeholder="+7 (___) ___-__-__"
+                    onChange={(event) =>
+                      setField('ownerPhone', formatPhone(event.target.value))
+                    }
+                    className={`h-11 w-full rounded-xl border bg-white pl-10 pr-3.5 text-[14px] font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500 ${
+                      errors.ownerPhone
+                        ? 'border-red-300 focus:ring-4 focus:ring-red-50'
+                        : 'border-slate-200 focus:border-violet-300 focus:ring-4 focus:ring-violet-100'
+                    }`}
                   />
+                  {errors.ownerPhone && (
+                    <div className="mt-1.5 text-[12px] font-bold text-red-600">
+                      {errors.ownerPhone}
+                    </div>
+                  )}
                 </div>
-                {errors.restaurantPhone && <div className="mt-1.5 text-[12px] font-bold text-red-600">{errors.restaurantPhone}</div>}
               </div>
+
+              {isBranchMode && (
+                <div>
+                  <FieldLabel>Телефон филиала</FieldLabel>
+                  <div className="relative">
+                    <Phone className="pointer-events-none absolute left-3.5 top-[14px] h-4 w-4 text-slate-400" />
+                    <input
+                      type="tel"
+                      inputMode="numeric"
+                      value={form.restaurantPhone}
+                      placeholder="Если пусто — номер владельца"
+                      onChange={(event) =>
+                        setField('restaurantPhone', formatPhone(event.target.value))
+                      }
+                      className={`h-11 w-full rounded-xl border bg-white pl-10 pr-3.5 text-[14px] font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 ${
+                        errors.restaurantPhone
+                          ? 'border-red-300 focus:ring-4 focus:ring-red-50'
+                          : 'border-slate-200 focus:border-violet-300 focus:ring-4 focus:ring-violet-100'
+                      }`}
+                    />
+                  </div>
+                  {errors.restaurantPhone && (
+                    <div className="mt-1.5 text-[12px] font-bold text-red-600">
+                      {errors.restaurantPhone}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </section>
 
           <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-[0_12px_35px_rgba(15,23,42,0.05)]">
             <div className="mb-4">
               <div className="text-[16px] font-black text-slate-950">Основные данные</div>
-              <div className="mt-1 text-[12px] font-semibold text-slate-500">Заполните названия, адрес и график работы.</div>
+              <div className="mt-1 text-[12px] font-semibold text-slate-500">
+                Заполните названия, адрес и график работы.
+              </div>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <FieldLabel required>Название на русском</FieldLabel>
-                <TextInput value={form.nameRu} onChange={(value) => setField('nameRu', value)} placeholder="Например: Чайхана Астана" error={errors.nameRu} />
+                <TextInput
+                  value={form.nameRu}
+                  onChange={(value) => setField('nameRu', value)}
+                  placeholder="Например: Чайхана Астана"
+                  error={errors.nameRu}
+                />
               </div>
               <div>
                 <FieldLabel required>Название на казахском</FieldLabel>
-                <TextInput value={form.nameKk} onChange={(value) => setField('nameKk', value)} placeholder="Название на казахском" error={errors.nameKk} />
+                <TextInput
+                  value={form.nameKk}
+                  onChange={(value) => setField('nameKk', value)}
+                  placeholder="Название на казахском"
+                  error={errors.nameKk}
+                />
               </div>
               <div className="sm:col-span-2">
                 <FieldLabel>Адрес</FieldLabel>
@@ -339,10 +405,18 @@ export default function NewRestaurantPage() {
                     type="time"
                     value={form.openTime}
                     onChange={(event) => setField('openTime', event.target.value)}
-                    className={`h-11 w-full rounded-xl border bg-white pl-10 pr-3.5 text-[14px] font-semibold outline-none transition ${errors.openTime ? 'border-red-300 focus:ring-4 focus:ring-red-50' : 'border-slate-200 focus:border-violet-300 focus:ring-4 focus:ring-violet-100'}`}
+                    className={`h-11 w-full rounded-xl border bg-white pl-10 pr-3.5 text-[14px] font-semibold outline-none transition ${
+                      errors.openTime
+                        ? 'border-red-300 focus:ring-4 focus:ring-red-50'
+                        : 'border-slate-200 focus:border-violet-300 focus:ring-4 focus:ring-violet-100'
+                    }`}
                   />
                 </div>
-                {errors.openTime && <div className="mt-1.5 text-[12px] font-bold text-red-600">{errors.openTime}</div>}
+                {errors.openTime && (
+                  <div className="mt-1.5 text-[12px] font-bold text-red-600">
+                    {errors.openTime}
+                  </div>
+                )}
               </div>
               <div>
                 <FieldLabel required>Закрытие</FieldLabel>
@@ -352,33 +426,56 @@ export default function NewRestaurantPage() {
                     type="time"
                     value={form.closeTime}
                     onChange={(event) => setField('closeTime', event.target.value)}
-                    className={`h-11 w-full rounded-xl border bg-white pl-10 pr-3.5 text-[14px] font-semibold outline-none transition ${errors.closeTime ? 'border-red-300 focus:ring-4 focus:ring-red-50' : 'border-slate-200 focus:border-violet-300 focus:ring-4 focus:ring-violet-100'}`}
+                    className={`h-11 w-full rounded-xl border bg-white pl-10 pr-3.5 text-[14px] font-semibold outline-none transition ${
+                      errors.closeTime
+                        ? 'border-red-300 focus:ring-4 focus:ring-red-50'
+                        : 'border-slate-200 focus:border-violet-300 focus:ring-4 focus:ring-violet-100'
+                    }`}
                   />
                 </div>
-                {errors.closeTime && <div className="mt-1.5 text-[12px] font-bold text-red-600">{errors.closeTime}</div>}
+                {errors.closeTime && (
+                  <div className="mt-1.5 text-[12px] font-bold text-red-600">
+                    {errors.closeTime}
+                  </div>
+                )}
               </div>
             </div>
           </section>
 
           <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-[0_12px_35px_rgba(15,23,42,0.05)]">
             <div className="text-[16px] font-black text-slate-950">Работа после создания</div>
-            <div className="mt-1 text-[12px] font-semibold text-slate-500">Это разрешение на работу ресторана. Публикация и приём заказов всё равно включаются отдельно.</div>
+            <div className="mt-1 text-[12px] font-semibold text-slate-500">
+              Это разрешение на работу ресторана. Публикация и приём заказов всё равно
+              включаются отдельно.
+            </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <button
                 type="button"
                 onClick={() => setField('status', 'CLOSED')}
-                className={`rounded-xl border px-4 py-3 text-left transition ${form.status === 'CLOSED' ? 'border-violet-300 bg-violet-50 text-violet-800' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
+                className={`rounded-xl border px-4 py-3 text-left transition ${
+                  form.status === 'CLOSED'
+                    ? 'border-violet-300 bg-violet-50 text-violet-800'
+                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                }`}
               >
                 <div className="text-[13px] font-black">Оставить остановленным</div>
-                <div className="mt-1 text-[11px] font-semibold opacity-75">Безопасный вариант до проверки.</div>
+                <div className="mt-1 text-[11px] font-semibold opacity-75">
+                  Безопасный вариант до проверки.
+                </div>
               </button>
               <button
                 type="button"
                 onClick={() => setField('status', 'OPEN')}
-                className={`rounded-xl border px-4 py-3 text-left transition ${form.status === 'OPEN' ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
+                className={`rounded-xl border px-4 py-3 text-left transition ${
+                  form.status === 'OPEN'
+                    ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                }`}
               >
                 <div className="text-[13px] font-black">Разрешить работу</div>
-                <div className="mt-1 text-[11px] font-semibold opacity-75">Ресторан всё равно останется скрытым до одобрения.</div>
+                <div className="mt-1 text-[11px] font-semibold opacity-75">
+                  Ресторан всё равно останется скрытым до одобрения.
+                </div>
               </button>
             </div>
           </section>
@@ -407,7 +504,11 @@ export default function NewRestaurantPage() {
               className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-violet-600 bg-violet-600 px-6 text-[13px] font-black text-white shadow-lg shadow-violet-100 transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Save className="h-4 w-4" />
-              {loading ? 'Сохраняю…' : isBranchMode ? 'Создать филиал' : 'Создать ресторан'}
+              {loading
+                ? 'Сохраняю…'
+                : isBranchMode
+                  ? 'Создать филиал'
+                  : 'Создать ресторан'}
             </button>
           </div>
         </div>
