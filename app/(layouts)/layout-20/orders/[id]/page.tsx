@@ -300,10 +300,41 @@ function errorMessage(cause: unknown) {
   const raw = cause instanceof Error ? cause.message : "Операция не выполнена";
   const known: Record<string, string> = {
     "API connection failed": "Нет связи с backend. Проверьте, что сервер запущен.",
+    "Database request failed": "Не удалось получить данные из базы. Проверьте миграции backend.",
     Forbidden: "Недостаточно прав для этого действия.",
     Unauthorized: "Сессия истекла. Войдите в админку заново.",
   };
   return known[raw] || raw;
+}
+
+function FinanceGroup({
+  title,
+  rows,
+  totalLabel,
+  total,
+}: {
+  title: string;
+  rows: Array<[string, string]>;
+  totalLabel: string;
+  total: string;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+      <div className="mb-2 font-semibold text-slate-950">{title}</div>
+      <div className="space-y-1 text-sm">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex justify-between gap-3 py-1.5 text-slate-600">
+            <span>{label}</span>
+            <span className="shrink-0 font-medium text-slate-900">{value}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex justify-between gap-3 border-t border-slate-200 pt-3 text-sm">
+        <strong>{totalLabel}</strong>
+        <strong className="shrink-0 text-base">{total}</strong>
+      </div>
+    </div>
+  );
 }
 
 export default function OrderDetailsPage() {
@@ -391,12 +422,12 @@ export default function OrderDetailsPage() {
         } catch (cause) {
           if (seq === requestSeq.current) {
             setHistory(null);
-            setHistoryError(cause instanceof Error ? cause.message : "История недоступна");
+            setHistoryError(errorMessage(cause));
           }
         }
       } catch (cause) {
         if (seq !== requestSeq.current) return;
-        setErr(cause instanceof Error ? cause.message : "Ошибка загрузки заказа");
+        setErr(errorMessage(cause));
       } finally {
         if (seq === requestSeq.current) setLoading(false);
       }
@@ -429,7 +460,7 @@ export default function OrderDetailsPage() {
       .catch((cause) => {
         if (!alive) return;
         setCouriers([]);
-        setCourierListError(cause instanceof Error ? cause.message : "Список курьеров недоступен");
+        setCourierListError(errorMessage(cause));
       });
 
     return () => {
@@ -603,8 +634,8 @@ export default function OrderDetailsPage() {
           {[
             ["Сумма заказа", formatMoney(order.total), `Товары ${formatMoney(order.subtotal)}`],
             ["Оплата", paymentStatusLabel(order.paymentStatus), paymentMethodLabel(order.paymentMethod)],
-            ["Курьеру", canReadFinance && isDelivery ? formatMoney(order.courierFee ?? 0) : "—", isDelivery ? "После комиссии" : "Не используется"],
-            ["Ресторану", canReadFinance ? formatMoney(order.restaurantPayoutAmount ?? 0) : "—", canReadFinance ? `Комиссия ${formatMoney(order.restaurantCommissionAmount ?? 0)}` : "Данные скрыты"],
+            ["К выплате курьеру", canReadFinance && isDelivery && order.courierId ? formatMoney(order.courierFee ?? 0) : "—", isDelivery ? order.courierId ? `После удержания ${formatMoney(order.courierCommissionAmount ?? 0)}` : "Расчёт после назначения" : "Не используется"],
+            ["К выплате ресторану", canReadFinance ? formatMoney(order.restaurantPayoutAmount ?? 0) : "—", canReadFinance ? `После удержания ${formatMoney(order.restaurantCommissionAmount ?? 0)}` : "Данные скрыты"],
           ].map(([label, value, note]) => <div key={label} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm"><div className="text-xs font-medium text-slate-500">{label}</div><div className="mt-1 text-xl font-bold text-slate-950">{value}</div><div className="mt-0.5 text-xs text-slate-500">{note}</div></div>)}
         </div>
 
@@ -637,10 +668,23 @@ export default function OrderDetailsPage() {
             </div>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="mb-4 flex items-center justify-between"><h2 className="font-bold text-slate-950">Расчёт заказа</h2><span className="text-xs text-slate-500">{order.pricingSource ? "Расчёт зафиксирован системой" : "Стандартный расчёт"}</span></div>
-              <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm lg:grid-cols-3">
-                {[["Товары", formatMoney(order.subtotal)], ["Доставка", formatMoney(order.deliveryFee)], ["Скидка на товары", `− ${formatMoney(order.discountAmount ?? 0)}`], ["Скидка на доставку", `− ${formatMoney(order.deliveryDiscountAmount ?? 0)}`], ["Итого клиенту", formatMoney(order.total)]].map(([label, value]) => <div key={label} className="flex justify-between gap-3 border-b border-slate-100 py-2"><span className="text-slate-500">{label}</span><strong>{value}</strong></div>)}
-                {canReadFinance ? <>{[["Начислено курьеру", formatMoney(order.courierFeeGross ?? 0)], ["Комиссия с курьера", formatMoney(order.courierCommissionAmount ?? 0)], ["К выплате курьеру", formatMoney(order.courierFee ?? 0)], ["Бонус курьеру", formatMoney(order.courierBonusApplied ?? 0)], ["Комиссия с ресторана", formatMoney(order.restaurantCommissionAmount ?? 0)], ["К выплате ресторану", formatMoney(order.restaurantPayoutAmount ?? 0)]].map(([label, value]) => <div key={label} className="flex justify-between gap-3 border-b border-slate-100 py-2"><span className="text-slate-500">{label}</span><strong>{value}</strong></div>)}</> : null}
+              <div className="mb-4 flex items-center justify-between"><h2 className="font-bold text-slate-950">Расчёт заказа</h2><span className="text-xs text-slate-500">Суммы зафиксированы backend для этого заказа</span></div>
+              <div className={`grid gap-3 ${canReadFinance ? "lg:grid-cols-3" : ""}`}>
+                <FinanceGroup title="Платит клиент" rows={[
+                  ["Товары", formatMoney(order.subtotal)],
+                  ["Доставка", formatMoney(order.deliveryFee)],
+                  ["Скидка на товары", `− ${formatMoney(order.discountAmount ?? 0)}`],
+                  ["Скидка на доставку", `− ${formatMoney(order.deliveryDiscountAmount ?? 0)}`],
+                ]} totalLabel="Итого к оплате" total={formatMoney(order.total)} />
+                {canReadFinance ? <FinanceGroup title="Расчёт ресторана" rows={[
+                  ["Выручка за товары", formatMoney(order.subtotal)],
+                  [`Удержание JETKIZ${order.restaurantCommissionPctApplied != null ? ` — ${order.restaurantCommissionPctApplied}%` : ""}`, `− ${formatMoney(order.restaurantCommissionAmount ?? 0)}`],
+                ]} totalLabel="К выплате ресторану" total={formatMoney(order.restaurantPayoutAmount ?? 0)} /> : null}
+                {canReadFinance ? order.courierId ? <FinanceGroup title="Расчёт курьера" rows={[
+                  ["Начислено за доставку", formatMoney(order.courierFeeGross ?? 0)],
+                  [`Удержание JETKIZ${order.courierCommissionPctApplied != null ? ` — ${order.courierCommissionPctApplied}%` : ""}`, `− ${formatMoney(order.courierCommissionAmount ?? 0)}`],
+                  ["Дополнительный бонус", `+ ${formatMoney(order.courierBonusApplied ?? 0)}`],
+                ]} totalLabel="К выплате курьеру" total={formatMoney(order.courierFee ?? 0)} /> : <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4"><div className="font-semibold text-slate-950">Получает курьер</div><div className="mt-3 text-sm leading-5 text-slate-600">Курьер не назначен. Тариф, комиссия и итоговая выплата будут зафиксированы backend после назначения.</div></div> : null}
               </div>
             </section>
           </main>
@@ -663,7 +707,7 @@ export default function OrderDetailsPage() {
 
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-3 flex items-center justify-between"><h2 className="font-bold text-slate-950">История</h2><span className="text-xs text-slate-500">{timeline.length} событий</span></div>
-              {historyError ? <div className="mb-3 rounded-lg bg-rose-50 p-2 text-xs text-rose-700">{historyError}</div> : null}
+              {historyError ? <div className="mb-3 rounded-lg border border-rose-100 bg-rose-50 p-3 text-xs text-rose-700"><div className="font-semibold">История временно недоступна</div><div className="mt-1">{historyError}</div><button type="button" onClick={() => void loadOrderAndHistory(false)} className="mt-2 font-semibold underline underline-offset-2">Повторить загрузку</button></div> : null}
               <div className="max-h-[310px] space-y-2 overflow-y-auto pr-1">{timeline.map((item) => <div key={`${item.kind}:${item.id}`} className="border-l-2 border-slate-200 py-1 pl-3"><div className="flex justify-between gap-3"><div className="text-sm font-semibold text-slate-900">{timelineTitle(item)}</div><div className="shrink-0 text-[10px] text-slate-400">{formatDate(item.createdAt)}</div></div><div className="text-xs text-slate-500">{actorLabel(item)}</div>{item.data?.reason || typeof item.data?.metadata?.reason === "string" ? <div className="mt-1 text-xs text-slate-700">{item.data?.reason || String(item.data?.metadata?.reason)}</div> : null}</div>)}{!timeline.length && !historyError ? <div className="text-sm text-slate-500">История пока пуста</div> : null}</div>
             </section>
           </aside>
