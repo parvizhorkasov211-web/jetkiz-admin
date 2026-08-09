@@ -1,25 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, Building2, Clock3, MapPin, Phone, Save, Store, X } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Phone, MapPin, Clock, Building2, Menu } from 'lucide-react';
-import { apiFetch } from '@/lib/api';
-import { Button } from '@/components/ui/button';
 
-type CreateRestaurantPayload = {
-  nameRu: string;
-  nameKk: string;
-  phone: string;
-  ownerPhone?: string;
-  ownerUserId?: string;
-  fromRestaurantId?: string;
-  address: string | null;
-  workingHours: string;
-  status: 'OPEN' | 'CLOSED';
-};
+import { apiFetch } from '@/lib/api';
 
 type FormState = {
-  phone: string;
+  ownerPhone: string;
+  restaurantPhone: string;
   nameRu: string;
   nameKk: string;
   address: string;
@@ -28,116 +17,113 @@ type FormState = {
   status: 'OPEN' | 'CLOSED';
 };
 
-type FieldErrors = Record<string, string>;
-
-const PHONE_PREFIX = '+7';
-const PHONE_PLACEHOLDER = '+7 (___) ___-__-__';
-const PHONE_DIGITS_LENGTH = 11;
+type FieldErrors = Partial<Record<keyof FormState, string>>;
 
 const initialForm: FormState = {
-  phone: '',
+  ownerPhone: '',
+  restaurantPhone: '',
   nameRu: '',
   nameKk: '',
   address: '',
   openTime: '09:00',
   closeTime: '22:00',
-  status: 'OPEN',
+  status: 'CLOSED',
 };
 
-function extractPhoneDigits(value: string): string {
-  return value.replace(/\D/g, '');
-}
+const PHONE_DIGITS_LENGTH = 11;
 
 function normalizePhoneDigits(value: string): string {
-  let digits = extractPhoneDigits(value);
-
+  let digits = value.replace(/\D/g, '');
   if (!digits) return '';
-
-  if (digits.startsWith('8')) {
-    digits = `7${digits.slice(1)}`;
-  }
-
-  if (!digits.startsWith('7')) {
-    digits = `7${digits}`;
-  }
-
+  if (digits.startsWith('8')) digits = `7${digits.slice(1)}`;
+  if (!digits.startsWith('7')) digits = `7${digits}`;
   return digits.slice(0, PHONE_DIGITS_LENGTH);
 }
 
-function formatPhoneInput(value: string): string {
+function formatPhone(value: string): string {
   const digits = normalizePhoneDigits(value);
-
-  if (!digits) {
-    return '';
-  }
+  if (!digits) return '';
 
   const local = digits.slice(1);
-  let result = PHONE_PREFIX;
-
-  if (local.length > 0) {
-    result += ` (${local.slice(0, 3)}`;
-  }
-
-  if (local.length >= 3) {
-    result += ')';
-  }
-
-  if (local.length > 3) {
-    result += ` ${local.slice(3, 6)}`;
-  }
-
-  if (local.length > 6) {
-    result += `-${local.slice(6, 8)}`;
-  }
-
-  if (local.length > 8) {
-    result += `-${local.slice(8, 10)}`;
-  }
-
+  let result = '+7';
+  if (local.length > 0) result += ` (${local.slice(0, 3)}`;
+  if (local.length >= 3) result += ')';
+  if (local.length > 3) result += ` ${local.slice(3, 6)}`;
+  if (local.length > 6) result += `-${local.slice(6, 8)}`;
+  if (local.length > 8) result += `-${local.slice(8, 10)}`;
   return result;
 }
 
-function normalizePhoneForSubmit(value: string): string {
-  return normalizePhoneDigits(value);
-}
-
 function isPhoneComplete(value: string): boolean {
-  return normalizePhoneForSubmit(value).length === PHONE_DIGITS_LENGTH;
+  return normalizePhoneDigits(value).length === PHONE_DIGITS_LENGTH;
 }
 
-function extractErrorMessage(error: unknown): string {
-  if (!error) return 'Ошибка создания ресторана';
+function statusFromError(error: unknown): number | null {
+  if (!error || typeof error !== 'object') return null;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === 'number' ? status : null;
+}
 
-  if (typeof error === 'string') {
-    return error;
-  }
+function createErrorMessage(error: unknown): string {
+  const status = statusFromError(error);
+  const message = error instanceof Error ? error.message.toLowerCase() : '';
 
-  if (typeof error === 'object' && error !== null) {
-    const maybeError = error as {
-      message?: string | string[];
-      error?: string;
-    };
+  if (message.includes('nameru')) return 'Укажите название на русском языке.';
+  if (message.includes('namekk')) return 'Укажите название на казахском языке.';
+  if (message.includes('phone')) return 'Проверьте номер телефона.';
+  if (message.includes('workinghours')) return 'Проверьте время работы.';
+  if (message.includes('already exists') || message.includes('unique')) return 'Такая запись уже существует. Проверьте введённые данные.';
 
-    if (Array.isArray(maybeError.message) && maybeError.message.length > 0) {
-      return maybeError.message.join(', ');
-    }
+  if (status === 400) return 'Проверьте заполненные поля и повторите попытку.';
+  if (status === 401) return 'Сессия истекла. Войдите снова.';
+  if (status === 403) return 'У вас нет прав для создания ресторана.';
+  if (status === 409) return 'Такая запись уже существует или данные изменились.';
+  if (status !== null && status >= 500) return 'Сервис временно недоступен. Повторите попытку позже.';
 
-    if (
-      typeof maybeError.message === 'string' &&
-      maybeError.message.trim().length > 0
-    ) {
-      return maybeError.message;
-    }
+  return 'Не удалось создать ресторан. Повторите попытку.';
+}
 
-    if (
-      typeof maybeError.error === 'string' &&
-      maybeError.error.trim().length > 0
-    ) {
-      return maybeError.error;
-    }
-  }
+function FieldLabel({ children, required = false }: { children: React.ReactNode; required?: boolean }) {
+  return (
+    <label className="mb-2 block text-[13px] font-black text-slate-700">
+      {children}
+      {required && <span className="ml-1 text-red-500">*</span>}
+    </label>
+  );
+}
 
-  return 'Ошибка создания ресторана';
+function TextInput({
+  value,
+  onChange,
+  placeholder,
+  disabled,
+  error,
+  type = 'text',
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  error?: string;
+  type?: string;
+}) {
+  return (
+    <>
+      <input
+        type={type}
+        value={value}
+        disabled={disabled}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        className={`h-11 w-full rounded-xl border bg-white px-3.5 text-[14px] font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500 ${
+          error
+            ? 'border-red-300 focus:border-red-400 focus:ring-4 focus:ring-red-50'
+            : 'border-slate-200 focus:border-violet-300 focus:ring-4 focus:ring-violet-100'
+        }`}
+      />
+      {error && <div className="mt-1.5 text-[12px] font-bold text-red-600">{error}</div>}
+    </>
+  );
 }
 
 export default function NewRestaurantPage() {
@@ -145,464 +131,287 @@ export default function NewRestaurantPage() {
   const searchParams = useSearchParams();
 
   const mode = searchParams.get('mode') ?? '';
-  const ownerUserId = searchParams.get('ownerUserId') ?? '';
-  const fromRestaurantId = searchParams.get('fromRestaurantId') ?? '';
-
-  const phoneFromQuery =
+  const ownerPhoneFromQuery =
     searchParams.get('ownerPhone') ??
     searchParams.get('phone') ??
     searchParams.get('initialPhone') ??
     '';
+  const fromRestaurantId = searchParams.get('fromRestaurantId') ?? '';
 
-  const phoneFromQueryFormatted = useMemo(
-    () => formatPhoneInput(phoneFromQuery),
-    [phoneFromQuery],
-  );
-
-  const isBranchMode = useMemo(() => {
-    return (
-      mode === 'branch' ||
-      Boolean(ownerUserId) ||
-      Boolean(fromRestaurantId) ||
-      Boolean(phoneFromQuery)
-    );
-  }, [mode, ownerUserId, fromRestaurantId, phoneFromQuery]);
+  const isBranchMode = mode === 'branch' || Boolean(ownerPhoneFromQuery) || Boolean(fromRestaurantId);
+  const fixedOwnerPhone = useMemo(() => formatPhone(ownerPhoneFromQuery), [ownerPhoneFromQuery]);
 
   const [form, setForm] = useState<FormState>(() => ({
     ...initialForm,
-    phone: phoneFromQueryFormatted,
+    ownerPhone: fixedOwnerPhone,
   }));
   const [errors, setErrors] = useState<FieldErrors>({});
-  const [loading, setLoading] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!phoneFromQueryFormatted) return;
-
-    setForm((prev) => ({
-      ...prev,
-      phone: phoneFromQueryFormatted,
-    }));
-  }, [phoneFromQueryFormatted]);
-
-  const phoneIsComplete = useMemo(() => isPhoneComplete(form.phone), [form.phone]);
-
-  const isFormValid = useMemo(() => {
-    return (
-      phoneIsComplete &&
-      form.nameRu.trim() !== '' &&
-      form.nameKk.trim() !== '' &&
-      form.openTime.trim() !== '' &&
-      form.closeTime.trim() !== ''
-    );
-  }, [phoneIsComplete, form.nameRu, form.nameKk, form.openTime, form.closeTime]);
+  const [loading, setLoading] = useState(false);
 
   const setField = <K extends keyof FormState>(key: K, value: FormState[K]) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
-
-    setErrors((prev) => {
-      if (!prev[key]) return prev;
-      const next = { ...prev };
+    setForm((current) => ({ ...current, [key]: value }));
+    setErrors((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
       delete next[key];
       return next;
     });
-
-    if (pageError) {
-      setPageError(null);
-    }
-
-    if (successMessage) {
-      setSuccessMessage(null);
-    }
-  };
-
-  const handlePhoneChange = (value: string) => {
-    if (isBranchMode && phoneFromQueryFormatted) {
-      return;
-    }
-
-    const digits = extractPhoneDigits(value);
-    if (digits.length > PHONE_DIGITS_LENGTH) return;
-
-    setField('phone', formatPhoneInput(value));
-  };
-
-  const validateForm = (): boolean => {
-    const nextErrors: FieldErrors = {};
-
-    if (!form.phone.trim()) {
-      nextErrors.phone = 'Телефон владельца обязателен';
-    } else if (!phoneIsComplete) {
-      nextErrors.phone = 'Номер должен содержать 11 цифр';
-    }
-
-    if (!form.nameRu.trim()) {
-      nextErrors.nameRu = 'Название на русском обязательно';
-    }
-
-    if (!form.nameKk.trim()) {
-      nextErrors.nameKk = 'Название на казахском обязательно';
-    }
-
-    if (!form.openTime.trim()) {
-      nextErrors.openTime = 'Укажите время открытия';
-    }
-
-    if (!form.closeTime.trim()) {
-      nextErrors.closeTime = 'Укажите время закрытия';
-    }
-
-    setErrors(nextErrors);
-    return Object.keys(nextErrors).length === 0;
-  };
-
-  const getClearedForm = (): FormState => {
-    if (isBranchMode && phoneFromQueryFormatted) {
-      return {
-        ...initialForm,
-        phone: phoneFromQueryFormatted,
-      };
-    }
-
-    return initialForm;
-  };
-
-  const handleClear = () => {
-    setForm(getClearedForm());
-    setErrors({});
     setPageError(null);
-    setSuccessMessage(null);
   };
 
-  const handleSubmit = async () => {
-    if (!validateForm()) {
-      return;
+  const validate = (): boolean => {
+    const next: FieldErrors = {};
+
+    if (!isPhoneComplete(form.ownerPhone)) next.ownerPhone = 'Укажите полный номер владельца.';
+    if (form.restaurantPhone.trim() && !isPhoneComplete(form.restaurantPhone)) {
+      next.restaurantPhone = 'Укажите полный номер ресторана или оставьте поле пустым.';
     }
+    if (!form.nameRu.trim()) next.nameRu = 'Укажите название на русском языке.';
+    if (!form.nameKk.trim()) next.nameKk = 'Укажите название на казахском языке.';
+    if (!form.openTime) next.openTime = 'Укажите время открытия.';
+    if (!form.closeTime) next.closeTime = 'Укажите время закрытия.';
+
+    setErrors(next);
+    return Object.keys(next).length === 0;
+  };
+
+  const submit = async () => {
+    if (!validate()) return;
 
     try {
       setLoading(true);
       setPageError(null);
-      setSuccessMessage(null);
 
-      const normalizedPhone = normalizePhoneForSubmit(form.phone);
+      const ownerPhone = normalizePhoneDigits(form.ownerPhone);
+      const restaurantPhone = form.restaurantPhone.trim()
+        ? normalizePhoneDigits(form.restaurantPhone)
+        : ownerPhone;
 
-      const payload: CreateRestaurantPayload = {
+      const payload = {
         nameRu: form.nameRu.trim(),
         nameKk: form.nameKk.trim(),
-        phone: normalizedPhone,
-        address: form.address.trim() || null,
-        workingHours: `${form.openTime} - ${form.closeTime}`,
+        phone: restaurantPhone,
+        address: form.address.trim() || undefined,
+        workingHours: `${form.openTime}-${form.closeTime}`,
         status: form.status,
+        ...(isBranchMode ? { ownerPhone } : {}),
       };
-
-      if (isBranchMode) {
-        payload.ownerPhone = normalizedPhone;
-
-        if (ownerUserId) {
-          payload.ownerUserId = ownerUserId;
-        }
-
-        if (fromRestaurantId) {
-          payload.fromRestaurantId = fromRestaurantId;
-        }
-      }
 
       await apiFetch(isBranchMode ? '/restaurants/admin/branches' : '/restaurants', {
         method: 'POST',
         body: JSON.stringify(payload),
       });
 
-      setSuccessMessage(
-        isBranchMode ? 'Филиал успешно создан' : 'Ресторан успешно создан',
-      );
-
-      setForm(getClearedForm());
-      setErrors({});
-
-      setTimeout(() => {
-        router.push('/layout-20/restaurants');
-      }, 700);
-    } catch (e: unknown) {
-      setPageError(extractErrorMessage(e));
+      router.push('/layout-20/restaurants');
+      router.refresh();
+    } catch (error) {
+      setPageError(createErrorMessage(error));
     } finally {
       setLoading(false);
     }
   };
 
+  const clear = () => {
+    setForm({ ...initialForm, ownerPhone: fixedOwnerPhone });
+    setErrors({});
+    setPageError(null);
+  };
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-[#489F2A] rounded-lg flex items-center justify-center">
-                <Building2 className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <h1 className="font-semibold text-gray-900">Food Delivery Admin</h1>
-                <p className="text-xs text-gray-500">Панель управления</p>
-              </div>
-            </div>
+    <div className="min-h-screen bg-[#f5f6fa] px-5 py-6 text-slate-900 sm:px-6 lg:px-8">
+      <div className="mx-auto w-full max-w-[980px]">
+        <button
+          type="button"
+          onClick={() => router.push('/layout-20/restaurants')}
+          className="mb-5 inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-[13px] font-black text-slate-700 transition hover:bg-slate-50"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Назад к ресторанам
+        </button>
 
-            <button
-              type="button"
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              <Menu className="w-5 h-5 text-gray-600" />
-            </button>
+        <div className="mb-5 flex items-start gap-4">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-violet-100 text-violet-700">
+            {isBranchMode ? <Building2 className="h-6 w-6" /> : <Store className="h-6 w-6" />}
           </div>
-        </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-6 py-12">
-        <div className="max-w-[560px] mx-auto">
-          <div className="mb-8">
-            <h2 className="text-2xl font-semibold text-gray-900 mb-2">
-              {isBranchMode ? 'Создание филиала' : 'Создание ресторана'}
-            </h2>
-            <p className="text-gray-600">
+          <div>
+            <h1 className="text-[28px] font-black tracking-tight text-slate-950">
+              {isBranchMode ? 'Добавить филиал' : 'Добавить ресторан'}
+            </h1>
+            <p className="mt-1 text-[14px] font-semibold text-slate-500">
               {isBranchMode
-                ? 'Номер владельца уже заполнен. Укажите данные нового филиала.'
-                : 'Введите данные ресторана и владельца'}
+                ? 'Филиал будет привязан к выбранному владельцу.'
+                : 'После создания ресторан появится в списке и будет ждать решения оператора.'}
             </p>
           </div>
+        </div>
 
-          {isBranchMode && (
-            <div className="mb-6 rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-900">
-              Новый филиал будет привязан к владельцу с номером{' '}
-              <strong>{form.phone || phoneFromQueryFormatted || 'не указан'}</strong>.
+        <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-[13px] font-bold leading-5 text-violet-800">
+          Новый ресторан создаётся скрытым и без приёма заказов. Показ в приложении и приём заказов включаются отдельно после проверки.
+        </div>
+
+        {pageError && (
+          <div className="mt-4 flex items-start justify-between gap-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-[13px] font-bold text-red-700">
+            <span>{pageError}</span>
+            <button type="button" onClick={() => setPageError(null)} aria-label="Закрыть сообщение">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
+        <div className="mt-5 space-y-4">
+          <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-[0_12px_35px_rgba(15,23,42,0.05)]">
+            <div className="mb-4">
+              <div className="text-[16px] font-black text-slate-950">Владелец и связь</div>
+              <div className="mt-1 text-[12px] font-semibold text-slate-500">Номер владельца используется для привязки ресторана к его аккаунту.</div>
             </div>
-          )}
 
-          {pageError && (
-            <div className="mb-6 text-sm text-red-600 bg-red-50 p-3 rounded-lg border border-red-200">
-              {pageError}
-            </div>
-          )}
-
-          {successMessage && (
-            <div className="mb-6 text-sm text-green-700 bg-green-50 p-3 rounded-lg border border-green-200">
-              {successMessage}
-            </div>
-          )}
-
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
-            <div className="space-y-6">
+            <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <label className="block text-sm font-medium text-gray-900 mb-2">
-                  Телефон владельца
-                  <span className="text-red-500 ml-1">*</span>
-                </label>
-
+                <FieldLabel required>Телефон владельца</FieldLabel>
                 <div className="relative">
-                  <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  <Phone className="pointer-events-none absolute left-3.5 top-[14px] h-4 w-4 text-slate-400" />
+                  <div className="pl-0">
+                    <input
+                      type="tel"
+                      inputMode="numeric"
+                      value={form.ownerPhone}
+                      disabled={isBranchMode && Boolean(fixedOwnerPhone)}
+                      placeholder="+7 (___) ___-__-__"
+                      onChange={(event) => setField('ownerPhone', formatPhone(event.target.value))}
+                      className={`h-11 w-full rounded-xl border bg-white pl-10 pr-3.5 text-[14px] font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500 ${errors.ownerPhone ? 'border-red-300 focus:ring-4 focus:ring-red-50' : 'border-slate-200 focus:border-violet-300 focus:ring-4 focus:ring-violet-100'}`}
+                    />
+                    {errors.ownerPhone && <div className="mt-1.5 text-[12px] font-bold text-red-600">{errors.ownerPhone}</div>}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <FieldLabel>Телефон ресторана</FieldLabel>
+                <div className="relative">
+                  <Phone className="pointer-events-none absolute left-3.5 top-[14px] h-4 w-4 text-slate-400" />
                   <input
                     type="tel"
                     inputMode="numeric"
-                    value={form.phone}
-                    onChange={(e) => handlePhoneChange(e.target.value)}
-                    readOnly={isBranchMode && Boolean(phoneFromQueryFormatted)}
-                    placeholder={PHONE_PLACEHOLDER}
-                    className={`w-full bg-white text-gray-900 pl-11 pr-4 py-2.5 rounded-lg border ${
-                      errors.phone
-                        ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
-                        : 'border-gray-300 focus:border-[#489F2A] focus:ring-[#489F2A]'
-                    } ${
-                      isBranchMode && phoneFromQueryFormatted
-                        ? 'cursor-not-allowed bg-gray-50 text-gray-700'
-                        : ''
-                    } focus:outline-none focus:ring-2 focus:ring-opacity-20 transition-all placeholder:text-gray-400`}
+                    value={form.restaurantPhone}
+                    placeholder="Если пусто — номер владельца"
+                    onChange={(event) => setField('restaurantPhone', formatPhone(event.target.value))}
+                    className={`h-11 w-full rounded-xl border bg-white pl-10 pr-3.5 text-[14px] font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 ${errors.restaurantPhone ? 'border-red-300 focus:ring-4 focus:ring-red-50' : 'border-slate-200 focus:border-violet-300 focus:ring-4 focus:ring-violet-100'}`}
                   />
                 </div>
-
-                {errors.phone && (
-                  <p className="text-red-600 text-sm mt-1.5">{errors.phone}</p>
-                )}
-
-                <p className="text-gray-500 text-sm mt-1.5">
-                  {isBranchMode
-                    ? 'Этот номер взят из выбранного ресторана и используется для владельца филиалов'
-                    : 'Используется для входа владельца ресторана'}
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-900 mb-2">
-                  Название ресторана (RU)
-                  <span className="text-red-500 ml-1">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={form.nameRu}
-                  onChange={(e) => setField('nameRu', e.target.value)}
-                  placeholder={isBranchMode ? 'Например: Чайхана Филиал 2' : 'Название на русском'}
-                  className={`w-full bg-white text-gray-900 px-4 py-2.5 rounded-lg border ${
-                    errors.nameRu
-                      ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
-                      : 'border-gray-300 focus:border-[#489F2A] focus:ring-[#489F2A]'
-                  } focus:outline-none focus:ring-2 focus:ring-opacity-20 transition-all placeholder:text-gray-400`}
-                />
-                {errors.nameRu && (
-                  <p className="text-red-600 text-sm mt-1.5">{errors.nameRu}</p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-900 mb-2">
-                  Название ресторана (KK)
-                  <span className="text-red-500 ml-1">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={form.nameKk}
-                  onChange={(e) => setField('nameKk', e.target.value)}
-                  placeholder={isBranchMode ? 'Например: Чайхана Филиал 2' : 'Название на казахском'}
-                  className={`w-full bg-white text-gray-900 px-4 py-2.5 rounded-lg border ${
-                    errors.nameKk
-                      ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
-                      : 'border-gray-300 focus:border-[#489F2A] focus:ring-[#489F2A]'
-                  } focus:outline-none focus:ring-2 focus:ring-opacity-20 transition-all placeholder:text-gray-400`}
-                />
-                {errors.nameKk && (
-                  <p className="text-red-600 text-sm mt-1.5">{errors.nameKk}</p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-900 mb-2">
-                  Адрес
-                </label>
-                <div className="relative">
-                  <MapPin className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                  <input
-                    type="text"
-                    value={form.address}
-                    onChange={(e) => setField('address', e.target.value)}
-                    placeholder="Город, улица, дом"
-                    className="w-full bg-white text-gray-900 pl-11 pr-4 py-2.5 rounded-lg border border-gray-300 focus:border-[#489F2A] focus:outline-none focus:ring-2 focus:ring-[#489F2A] focus:ring-opacity-20 transition-all placeholder:text-gray-400"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-900 mb-2">
-                  Время работы
-                </label>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs text-gray-600 mb-1.5">
-                      Открытие
-                    </label>
-                    <div className="relative">
-                      <Clock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
-                      <input
-                        type="time"
-                        value={form.openTime}
-                        onChange={(e) => setField('openTime', e.target.value)}
-                        className={`w-full bg-white text-gray-900 pl-11 pr-4 py-2.5 rounded-lg border ${
-                          errors.openTime
-                            ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
-                            : 'border-gray-300 focus:border-[#489F2A] focus:ring-[#489F2A]'
-                        } focus:outline-none focus:ring-2 focus:ring-opacity-20 transition-all`}
-                      />
-                    </div>
-                    {errors.openTime && (
-                      <p className="text-red-600 text-sm mt-1.5">{errors.openTime}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-xs text-gray-600 mb-1.5">
-                      Закрытие
-                    </label>
-                    <div className="relative">
-                      <Clock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
-                      <input
-                        type="time"
-                        value={form.closeTime}
-                        onChange={(e) => setField('closeTime', e.target.value)}
-                        className={`w-full bg-white text-gray-900 pl-11 pr-4 py-2.5 rounded-lg border ${
-                          errors.closeTime
-                            ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
-                            : 'border-gray-300 focus:border-[#489F2A] focus:ring-[#489F2A]'
-                        } focus:outline-none focus:ring-2 focus:ring-opacity-20 transition-all`}
-                      />
-                    </div>
-                    {errors.closeTime && (
-                      <p className="text-red-600 text-sm mt-1.5">{errors.closeTime}</p>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-900 mb-2">
-                  Статус
-                </label>
-                <select
-                  value={form.status}
-                  onChange={(e) =>
-                    setField('status', e.target.value as 'OPEN' | 'CLOSED')
-                  }
-                  className="w-full bg-white text-gray-900 px-4 py-2.5 rounded-lg border border-gray-300 focus:border-[#489F2A] focus:outline-none focus:ring-2 focus:ring-[#489F2A] focus:ring-opacity-20 transition-all appearance-none cursor-pointer"
-                  style={{
-                    backgroundImage:
-                      'url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'%23666\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'%3e%3cpolyline points=\'6 9 12 15 18 9\'%3e%3c/polyline%3e%3c/svg%3e")',
-                    backgroundRepeat: 'no-repeat',
-                    backgroundPosition: 'right 0.75rem center',
-                    backgroundSize: '1.25em 1.25em',
-                  }}
-                >
-                  <option value="OPEN">OPEN</option>
-                  <option value="CLOSED">CLOSED</option>
-                </select>
-              </div>
-
-              <div className="flex gap-3 pt-2">
-                <Button
-                  onClick={handleSubmit}
-                  disabled={!isFormValid || loading}
-                  className="flex-1 bg-[#489F2A] hover:bg-[#3a7f22] text-white"
-                >
-                  {loading
-                    ? isBranchMode
-                      ? 'Создание филиала...'
-                      : 'Создание...'
-                    : isBranchMode
-                      ? 'Создать филиал'
-                      : 'Создать ресторан'}
-                </Button>
-
-                <Button
-                  variant="outline"
-                  onClick={handleClear}
-                  disabled={loading}
-                >
-                  Очистить
-                </Button>
-
-                <Button
-                  variant="outline"
-                  onClick={() => router.push('/layout-20/restaurants')}
-                  disabled={loading}
-                >
-                  Отмена
-                </Button>
+                {errors.restaurantPhone && <div className="mt-1.5 text-[12px] font-bold text-red-600">{errors.restaurantPhone}</div>}
               </div>
             </div>
-          </div>
+          </section>
 
-          <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <p className="text-sm text-blue-900">
-              <strong>Важно:</strong>{' '}
-              {isBranchMode
-                ? 'После создания филиал появится в списке ресторанов у этого владельца.'
-                : 'После создания ресторана владелец сможет войти в систему, используя указанный номер телефона.'}
-            </p>
+          <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-[0_12px_35px_rgba(15,23,42,0.05)]">
+            <div className="mb-4">
+              <div className="text-[16px] font-black text-slate-950">Основные данные</div>
+              <div className="mt-1 text-[12px] font-semibold text-slate-500">Заполните названия, адрес и график работы.</div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <FieldLabel required>Название на русском</FieldLabel>
+                <TextInput value={form.nameRu} onChange={(value) => setField('nameRu', value)} placeholder="Например: Чайхана Астана" error={errors.nameRu} />
+              </div>
+              <div>
+                <FieldLabel required>Название на казахском</FieldLabel>
+                <TextInput value={form.nameKk} onChange={(value) => setField('nameKk', value)} placeholder="Название на казахском" error={errors.nameKk} />
+              </div>
+              <div className="sm:col-span-2">
+                <FieldLabel>Адрес</FieldLabel>
+                <div className="relative">
+                  <MapPin className="pointer-events-none absolute left-3.5 top-[14px] h-4 w-4 text-slate-400" />
+                  <input
+                    value={form.address}
+                    onChange={(event) => setField('address', event.target.value)}
+                    placeholder="Город, улица, дом"
+                    className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3.5 text-[14px] font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-violet-300 focus:ring-4 focus:ring-violet-100"
+                  />
+                </div>
+              </div>
+              <div>
+                <FieldLabel required>Открытие</FieldLabel>
+                <div className="relative">
+                  <Clock3 className="pointer-events-none absolute left-3.5 top-[14px] h-4 w-4 text-slate-400" />
+                  <input
+                    type="time"
+                    value={form.openTime}
+                    onChange={(event) => setField('openTime', event.target.value)}
+                    className={`h-11 w-full rounded-xl border bg-white pl-10 pr-3.5 text-[14px] font-semibold outline-none transition ${errors.openTime ? 'border-red-300 focus:ring-4 focus:ring-red-50' : 'border-slate-200 focus:border-violet-300 focus:ring-4 focus:ring-violet-100'}`}
+                  />
+                </div>
+                {errors.openTime && <div className="mt-1.5 text-[12px] font-bold text-red-600">{errors.openTime}</div>}
+              </div>
+              <div>
+                <FieldLabel required>Закрытие</FieldLabel>
+                <div className="relative">
+                  <Clock3 className="pointer-events-none absolute left-3.5 top-[14px] h-4 w-4 text-slate-400" />
+                  <input
+                    type="time"
+                    value={form.closeTime}
+                    onChange={(event) => setField('closeTime', event.target.value)}
+                    className={`h-11 w-full rounded-xl border bg-white pl-10 pr-3.5 text-[14px] font-semibold outline-none transition ${errors.closeTime ? 'border-red-300 focus:ring-4 focus:ring-red-50' : 'border-slate-200 focus:border-violet-300 focus:ring-4 focus:ring-violet-100'}`}
+                  />
+                </div>
+                {errors.closeTime && <div className="mt-1.5 text-[12px] font-bold text-red-600">{errors.closeTime}</div>}
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-[0_12px_35px_rgba(15,23,42,0.05)]">
+            <div className="text-[16px] font-black text-slate-950">Работа после создания</div>
+            <div className="mt-1 text-[12px] font-semibold text-slate-500">Это разрешение на работу ресторана. Публикация и приём заказов всё равно включаются отдельно.</div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setField('status', 'CLOSED')}
+                className={`rounded-xl border px-4 py-3 text-left transition ${form.status === 'CLOSED' ? 'border-violet-300 bg-violet-50 text-violet-800' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
+              >
+                <div className="text-[13px] font-black">Оставить остановленным</div>
+                <div className="mt-1 text-[11px] font-semibold opacity-75">Безопасный вариант до проверки.</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setField('status', 'OPEN')}
+                className={`rounded-xl border px-4 py-3 text-left transition ${form.status === 'OPEN' ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
+              >
+                <div className="text-[13px] font-black">Разрешить работу</div>
+                <div className="mt-1 text-[11px] font-semibold opacity-75">Ресторан всё равно останется скрытым до одобрения.</div>
+              </button>
+            </div>
+          </section>
+
+          <div className="flex flex-wrap justify-end gap-3 pb-6">
+            <button
+              type="button"
+              disabled={loading}
+              onClick={clear}
+              className="inline-flex h-11 items-center justify-center rounded-xl border border-slate-200 bg-white px-5 text-[13px] font-black text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+            >
+              Очистить
+            </button>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => router.push('/layout-20/restaurants')}
+              className="inline-flex h-11 items-center justify-center rounded-xl border border-slate-200 bg-white px-5 text-[13px] font-black text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => void submit()}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-violet-600 bg-violet-600 px-6 text-[13px] font-black text-white shadow-lg shadow-violet-100 transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Save className="h-4 w-4" />
+              {loading ? 'Сохраняю…' : isBranchMode ? 'Создать филиал' : 'Создать ресторан'}
+            </button>
           </div>
         </div>
-      </main>
+      </div>
     </div>
   );
 }
