@@ -8,7 +8,6 @@ import {
   ChevronRight,
   Download,
   Eye,
-  EyeOff,
   ImageIcon,
   Plus,
   RefreshCw,
@@ -70,6 +69,23 @@ type RestaurantRow = {
   isMainBranch?: boolean | null;
 };
 
+type RestaurantSummary = {
+  total: number;
+  visible: number;
+  accepting: number;
+  attention: number;
+  blocked: number;
+  archived: number;
+};
+
+type RestaurantListResponse = {
+  items: RestaurantRow[];
+  total: number;
+  page: number;
+  limit: number;
+  summary?: Partial<RestaurantSummary>;
+};
+
 type AdminView = {
   permissionCodes?: string[];
   permissions?: string[];
@@ -91,12 +107,24 @@ type EditorState = {
   sortOrder: string;
 };
 
-type DialogKind = 'changes' | 'reject' | 'block' | 'archive' | 'restore' | 'owner';
+type DialogKind = 'changes' | 'reject' | 'block' | 'unblock' | 'archive' | 'restore' | 'owner';
 type DialogState = { kind: DialogKind; restaurantId: string } | null;
 
+type Tone = 'neutral' | 'success' | 'warning' | 'danger' | 'blue';
+
 const PAGE_SIZE = 20;
+const EXPORT_PAGE_SIZE = 200;
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+const EMPTY_SUMMARY: RestaurantSummary = {
+  total: 0,
+  visible: 0,
+  accepting: 0,
+  attention: 0,
+  blocked: 0,
+  archived: 0,
+};
 
 function getRows(value: unknown): RestaurantRow[] {
   if (Array.isArray(value)) return value as RestaurantRow[];
@@ -106,6 +134,21 @@ function getRows(value: unknown): RestaurantRow[] {
     if (Array.isArray(record.data)) return record.data as RestaurantRow[];
   }
   return [];
+}
+
+function getPaged(value: unknown): RestaurantListResponse | null {
+  if (!value || Array.isArray(value) || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.items) || typeof record.total !== 'number') return null;
+  return {
+    items: record.items as RestaurantRow[],
+    total: Number(record.total),
+    page: Number(record.page ?? 1),
+    limit: Number(record.limit ?? PAGE_SIZE),
+    summary: record.summary && typeof record.summary === 'object'
+      ? (record.summary as Partial<RestaurantSummary>)
+      : undefined,
+  };
 }
 
 function restaurantName(row: RestaurantRow) {
@@ -242,6 +285,80 @@ function errorText(error: unknown, fallback: string) {
   return fallback;
 }
 
+function filterRows(
+  rows: RestaurantRow[],
+  query: string,
+  moderationFilter: ModerationFilter,
+  visibilityFilter: VisibilityFilter,
+  ordersFilter: OrdersFilter,
+) {
+  const q = query.trim().toLowerCase();
+  return rows.filter((row) => {
+    if (q) {
+      const haystack = [
+        row.nameRu,
+        row.nameKk,
+        row.phone,
+        row.address,
+        row.workingHours,
+        ownerName(row),
+        ownerPhone(row),
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+    if (moderationFilter === 'attention' && !needsDecision(row)) return false;
+    if (moderationFilter === 'approved' && !isApproved(row)) return false;
+    if (moderationFilter === 'blocked' && !isBlocked(row)) return false;
+    if (moderationFilter === 'archived' && !isArchived(row)) return false;
+    if (visibilityFilter === 'visible' && row.isInApp !== true) return false;
+    if (visibilityFilter === 'hidden' && row.isInApp === true) return false;
+    if (ordersFilter === 'accepting' && row.isAcceptingOrders !== true) return false;
+    if (ordersFilter === 'paused' && row.isAcceptingOrders === true) return false;
+    return true;
+  });
+}
+
+function buildSummary(rows: RestaurantRow[]): RestaurantSummary {
+  return {
+    total: rows.length,
+    visible: rows.filter((row) => row.isInApp === true && !isArchived(row)).length,
+    accepting: rows.filter((row) => row.isAcceptingOrders === true && !isArchived(row)).length,
+    attention: rows.filter(needsDecision).length,
+    blocked: rows.filter(isBlocked).length,
+    archived: rows.filter(isArchived).length,
+  };
+}
+
+function mergeSummary(value: Partial<RestaurantSummary> | undefined): RestaurantSummary {
+  return {
+    total: Number(value?.total ?? 0),
+    visible: Number(value?.visible ?? 0),
+    accepting: Number(value?.accepting ?? 0),
+    attention: Number(value?.attention ?? 0),
+    blocked: Number(value?.blocked ?? 0),
+    archived: Number(value?.archived ?? 0),
+  };
+}
+
+function buildListParams(input: {
+  page: number;
+  limit: number;
+  query: string;
+  moderationFilter: ModerationFilter;
+  visibilityFilter: VisibilityFilter;
+  ordersFilter: OrdersFilter;
+}) {
+  const params = new URLSearchParams();
+  params.set('page', String(input.page));
+  params.set('limit', String(input.limit));
+  const q = input.query.trim();
+  if (q) params.set('q', q);
+  if (input.moderationFilter !== 'all') params.set('review', input.moderationFilter);
+  if (input.visibilityFilter !== 'all') params.set('visibility', input.visibilityFilter);
+  if (input.ordersFilter !== 'all') params.set('orders', input.ordersFilter);
+  return params;
+}
+
 function exportCsv(rows: RestaurantRow[]) {
   const columns = ['Ресторан', 'Филиал', 'Телефон', 'Адрес', 'Владелец', 'Проверка', 'В приложении', 'Приём заказов', 'Сейчас'];
   const lines = rows.map((row) => [
@@ -255,17 +372,15 @@ function exportCsv(rows: RestaurantRow[]) {
     row.isAcceptingOrders ? 'Да' : 'Нет',
     row.runtimeStatus === 'OPEN' ? 'Открыт' : 'Закрыт',
   ]);
-  const q = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`;
-  const csv = [columns, ...lines].map((line) => line.map(q).join(';')).join('\n');
+  const quote = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+  const csv = [columns, ...lines].map((line) => line.map(quote).join(';')).join('\n');
   const url = URL.createObjectURL(new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'restorany.csv';
-  a.click();
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'restorany.csv';
+  link.click();
   URL.revokeObjectURL(url);
 }
-
-type Tone = 'neutral' | 'success' | 'warning' | 'danger' | 'blue';
 
 function Badge({ children, tone = 'neutral' }: { children: ReactNode; tone?: Tone }) {
   const styles: Record<Tone, string> = {
@@ -407,11 +522,16 @@ export function RestaurantsManagementPage() {
   const [rows, setRows] = useState<RestaurantRow[]>([]);
   const [admin, setAdmin] = useState<AdminView | null>(null);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
+  const [serverPaging, setServerPaging] = useState(false);
+  const [total, setTotal] = useState(0);
+  const [summary, setSummary] = useState<RestaurantSummary>(EMPTY_SUMMARY);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [moderationFilter, setModerationFilter] = useState<ModerationFilter>('all');
   const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>('all');
   const [ordersFilter, setOrdersFilter] = useState<OrdersFilter>('all');
@@ -425,26 +545,66 @@ export function RestaurantsManagementPage() {
 
   const canUpdate = can(admin, 'restaurants.update');
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query), 250);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    let alive = true;
+    void getSession().then((session) => {
+      if (!alive || !session.authenticated) return;
+      setAdmin((session.admin ?? null) as AdminView | null);
+    });
+    return () => { alive = false; };
+  }, []);
+
   const load = useCallback(async (silent = false) => {
     try {
       if (!silent) setLoading(true);
       setError(null);
-      const [restaurantsResult, sessionResult] = await Promise.allSettled([
-        apiFetch<unknown>('/restaurants'),
-        getSession(),
-      ]);
-      if (restaurantsResult.status === 'rejected') throw restaurantsResult.reason;
-      setRows(getRows(restaurantsResult.value));
-      if (sessionResult.status === 'fulfilled' && sessionResult.value.authenticated) {
-        setAdmin((sessionResult.value.admin ?? null) as AdminView | null);
+      const params = buildListParams({
+        page,
+        limit: PAGE_SIZE,
+        query: debouncedQuery,
+        moderationFilter,
+        visibilityFilter,
+        ordersFilter,
+      });
+      const result = await apiFetch<unknown>(`/restaurants?${params.toString()}`);
+      const paged = getPaged(result);
+
+      if (paged) {
+        setServerPaging(true);
+        setRows(paged.items);
+        setTotal(paged.total);
+        setSummary(paged.summary ? mergeSummary(paged.summary) : buildSummary(paged.items));
+        if (paged.page !== page && Number.isFinite(paged.page)) setPage(Math.max(1, paged.page));
+      } else {
+        const legacyRows = getRows(result);
+        const filteredLegacy = filterRows(
+          legacyRows,
+          debouncedQuery,
+          moderationFilter,
+          visibilityFilter,
+          ordersFilter,
+        );
+        setServerPaging(false);
+        setRows(legacyRows);
+        setTotal(filteredLegacy.length);
+        setSummary(buildSummary(legacyRows));
       }
     } catch (caught) {
       setError(errorText(caught, 'Не удалось загрузить список ресторанов. Повторите попытку.'));
-      if (!silent) setRows([]);
+      if (!silent) {
+        setRows([]);
+        setTotal(0);
+        setSummary(EMPTY_SUMMARY);
+      }
     } finally {
       if (!silent) setLoading(false);
     }
-  }, []);
+  }, [page, debouncedQuery, moderationFilter, visibilityFilter, ordersFilter]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -452,50 +612,28 @@ export function RestaurantsManagementPage() {
 
   useEffect(() => {
     setEditor(activeRow ? editorFrom(activeRow) : null);
-  }, [activeRow]);
+    if (activeId && !activeRow && !loading) setActiveId(null);
+  }, [activeRow, activeId, loading]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return rows.filter((row) => {
-      if (q) {
-        const haystack = [
-          row.nameRu,
-          row.nameKk,
-          row.phone,
-          row.address,
-          row.workingHours,
-          ownerName(row),
-          ownerPhone(row),
-        ].filter(Boolean).join(' ').toLowerCase();
-        if (!haystack.includes(q)) return false;
-      }
+  const filteredLegacy = useMemo(() => filterRows(
+    rows,
+    debouncedQuery,
+    moderationFilter,
+    visibilityFilter,
+    ordersFilter,
+  ), [rows, debouncedQuery, moderationFilter, visibilityFilter, ordersFilter]);
 
-      if (moderationFilter === 'attention' && !needsDecision(row)) return false;
-      if (moderationFilter === 'approved' && !isApproved(row)) return false;
-      if (moderationFilter === 'blocked' && !isBlocked(row)) return false;
-      if (moderationFilter === 'archived' && !isArchived(row)) return false;
-      if (visibilityFilter === 'visible' && row.isInApp !== true) return false;
-      if (visibilityFilter === 'hidden' && row.isInApp === true) return false;
-      if (ordersFilter === 'accepting' && row.isAcceptingOrders !== true) return false;
-      if (ordersFilter === 'paused' && row.isAcceptingOrders === true) return false;
-      return true;
-    });
-  }, [rows, query, moderationFilter, visibilityFilter, ordersFilter]);
-
-  useEffect(() => { setPage(1); }, [query, moderationFilter, visibilityFilter, ordersFilter]);
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
-  const pageRows = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const pageRows = serverPaging
+    ? rows
+    : filteredLegacy.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
-  const summary = useMemo(() => ({
-    total: rows.length,
-    visible: rows.filter((row) => row.isInApp === true && !isArchived(row)).length,
-    accepting: rows.filter((row) => row.isAcceptingOrders === true && !isArchived(row)).length,
-    attention: rows.filter(needsDecision).length,
-    blocked: rows.filter(isBlocked).length,
-    archived: rows.filter(isArchived).length,
-  }), [rows]);
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  const resetToFirstPage = () => setPage(1);
 
   const run = async (row: RestaurantRow, operation: () => Promise<unknown>, success: string) => {
     try {
@@ -612,6 +750,42 @@ export function RestaurantsManagementPage() {
     }
   };
 
+  const exportFiltered = async () => {
+    try {
+      setExporting(true);
+      setError(null);
+      const params = buildListParams({
+        page: 1,
+        limit: EXPORT_PAGE_SIZE,
+        query: debouncedQuery,
+        moderationFilter,
+        visibilityFilter,
+        ordersFilter,
+      });
+      const first = await apiFetch<unknown>(`/restaurants?${params.toString()}`);
+      const paged = getPaged(first);
+
+      if (!paged) {
+        exportCsv(filterRows(getRows(first), debouncedQuery, moderationFilter, visibilityFilter, ordersFilter));
+        return;
+      }
+
+      const all = [...paged.items];
+      const pages = Math.ceil(paged.total / EXPORT_PAGE_SIZE);
+      for (let current = 2; current <= pages; current += 1) {
+        params.set('page', String(current));
+        const next = getPaged(await apiFetch<unknown>(`/restaurants?${params.toString()}`));
+        if (!next) break;
+        all.push(...next.items);
+      }
+      exportCsv(all);
+    } catch (caught) {
+      setError(errorText(caught, 'Не удалось подготовить список для выгрузки.'));
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const dialogRow = dialog ? rows.find((row) => row.id === dialog.restaurantId) ?? null : null;
 
   const confirmDialog = async () => {
@@ -627,24 +801,20 @@ export function RestaurantsManagementPage() {
     setReason('');
 
     if (kind === 'changes') {
-      await patch(row, {
-        onboardingStatus: 'NEEDS_CHANGES',
-        onboardingNote: text,
-        isInApp: false,
-        isAcceptingOrders: false,
-      }, 'Ресторан возвращён на доработку.');
+      await patch(row, { onboardingStatus: 'NEEDS_CHANGES', onboardingNote: text }, 'Ресторан возвращён на доработку.');
     } else if (kind === 'reject') {
+      await patch(row, { onboardingStatus: 'REJECTED', onboardingNote: text }, 'Ресторан отклонён.');
+    } else if (kind === 'block') {
+      await patch(row, { onboardingStatus: 'BLOCKED', onboardingNote: text }, 'Ресторан заблокирован и остановлен.');
+    } else if (kind === 'unblock') {
       await patch(row, {
-        onboardingStatus: 'REJECTED',
-        onboardingNote: text,
+        onboardingStatus: 'APPROVED',
+        onboardingNote: null,
+        status: 'CLOSED',
         isInApp: false,
         isAcceptingOrders: false,
-      }, 'Ресторан отклонён.');
-    } else if (kind === 'block') {
-      await patch(row, {
-        onboardingStatus: 'BLOCKED',
-        onboardingNote: text,
-      }, 'Ресторан заблокирован и остановлен.');
+        isPinned: false,
+      }, 'Блокировка снята. Показ и приём заказов остаются выключенными.');
     } else if (kind === 'archive') {
       await run(row, () => apiFetch(`/restaurants/${row.id}`, { method: 'DELETE' }), 'Ресторан перемещён в архив.');
     } else if (kind === 'restore') {
@@ -663,9 +833,11 @@ export function RestaurantsManagementPage() {
 
   const clearFilters = () => {
     setQuery('');
+    setDebouncedQuery('');
     setModerationFilter('all');
     setVisibilityFilter('all');
     setOrdersFilter('all');
+    setPage(1);
   };
 
   const openBranch = (row: RestaurantRow) => {
@@ -681,6 +853,7 @@ export function RestaurantsManagementPage() {
       changes: { title: 'Вернуть на доработку', text: 'Ресторан будет скрыт, а приём заказов остановлен.', action: 'Вернуть на доработку', reason: true },
       reject: { title: 'Отклонить ресторан', text: 'Ресторан будет скрыт и не сможет принимать заказы.', action: 'Отклонить', danger: true, reason: true },
       block: { title: 'Заблокировать ресторан', text: 'Ресторан будет закрыт, скрыт и остановит приём заказов.', action: 'Заблокировать', danger: true, reason: true },
+      unblock: { title: 'Снять блокировку', text: 'Ресторан станет одобренным, но останется скрытым до отдельного включения.', action: 'Снять блокировку' },
       archive: { title: 'Переместить в архив', text: 'История сохранится. Ресторан будет скрыт и остановлен.', action: 'В архив', danger: true },
       restore: { title: 'Восстановить ресторан', text: 'Ресторан вернётся в рабочий список, но останется скрытым до отдельного включения.', action: 'Восстановить' },
       owner: { title: 'Сменить владельца', text: 'Доступ текущего владельца будет отключён, новый владелец получит доступ к этому ресторану.', action: 'Сохранить и сменить владельца' },
@@ -694,11 +867,11 @@ export function RestaurantsManagementPage() {
         <header className="mb-5 flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-[28px] font-bold tracking-[-0.025em]">Рестораны</h1>
-            <p className="mt-1 text-[13px] font-medium text-slate-500">{filtered.length} в списке с учётом фильтров</p>
+            <p className="mt-1 text-[13px] font-medium text-slate-500">{total} в списке с учётом фильтров</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button kind="export" onClick={() => exportCsv(filtered)} disabled={filtered.length === 0}>
-              <Download className="h-4 w-4" /> Экспорт
+            <Button kind="export" onClick={() => void exportFiltered()} disabled={total === 0 || exporting}>
+              <Download className="h-4 w-4" /> {exporting ? 'Подготовка' : 'Экспорт'}
             </Button>
             <Button kind="primary" onClick={() => router.push('/layout-20/restaurants/new')} disabled={!canUpdate}>
               <Plus className="h-4 w-4" /> Добавить ресторан
@@ -720,21 +893,26 @@ export function RestaurantsManagementPage() {
           <div className="grid gap-2 xl:grid-cols-[minmax(320px,1fr)_190px_180px_180px_auto]">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} className={`${inputClass} pl-10`} placeholder="Поиск по названию, адресу, телефону или владельцу" />
+              <input
+                value={query}
+                onChange={(event) => { setQuery(event.target.value); resetToFirstPage(); }}
+                className={`${inputClass} pl-10`}
+                placeholder="Поиск по названию, адресу, телефону или владельцу"
+              />
             </div>
-            <select value={moderationFilter} onChange={(event) => setModerationFilter(event.target.value as ModerationFilter)} className={inputClass}>
+            <select value={moderationFilter} onChange={(event) => { setModerationFilter(event.target.value as ModerationFilter); resetToFirstPage(); }} className={inputClass}>
               <option value="all">Любая проверка</option>
               <option value="attention">Требуют решения</option>
               <option value="approved">Одобренные</option>
               <option value="blocked">Заблокированные</option>
               <option value="archived">Архив</option>
             </select>
-            <select value={visibilityFilter} onChange={(event) => setVisibilityFilter(event.target.value as VisibilityFilter)} className={inputClass}>
+            <select value={visibilityFilter} onChange={(event) => { setVisibilityFilter(event.target.value as VisibilityFilter); resetToFirstPage(); }} className={inputClass}>
               <option value="all">Любая публикация</option>
               <option value="visible">В приложении</option>
               <option value="hidden">Скрытые</option>
             </select>
-            <select value={ordersFilter} onChange={(event) => setOrdersFilter(event.target.value as OrdersFilter)} className={inputClass}>
+            <select value={ordersFilter} onChange={(event) => { setOrdersFilter(event.target.value as OrdersFilter); resetToFirstPage(); }} className={inputClass}>
               <option value="all">Любой приём заказов</option>
               <option value="accepting">Принимают</option>
               <option value="paused">Остановлен</option>
@@ -803,10 +981,10 @@ export function RestaurantsManagementPage() {
           </div>
 
           <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-4 py-3">
-            <div className="text-[12px] text-slate-500">Страница {safePage} из {totalPages} · показано {pageRows.length} из {filtered.length}</div>
+            <div className="text-[12px] text-slate-500">Страница {safePage} из {totalPages} · показано {pageRows.length} из {total}</div>
             <div className="flex gap-2">
-              <Button disabled={safePage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft className="h-4 w-4" /> Назад</Button>
-              <Button disabled={safePage >= totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>Вперёд <ChevronRight className="h-4 w-4" /></Button>
+              <Button disabled={safePage <= 1 || loading} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft className="h-4 w-4" /> Назад</Button>
+              <Button disabled={safePage >= totalPages || loading} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>Вперёд <ChevronRight className="h-4 w-4" /></Button>
             </div>
           </div>
         </div>
@@ -832,52 +1010,64 @@ export function RestaurantsManagementPage() {
                 <Button kind="primary" disabled={!canUpdate || busyId === activeRow.id} onClick={() => setDialog({ kind: 'restore', restaurantId: activeRow.id })}>Восстановить ресторан</Button>
               </DrawerSection>
             ) : (
-              <>
-                <DrawerSection title="Решение по ресторану" subtitle="Одобрение не включает показ клиентам и приём заказов автоматически.">
-                  <div className="flex flex-wrap gap-2">
-                    {!isApproved(activeRow) && !isBlocked(activeRow) ? <Button kind="success" disabled={!canUpdate || busyId === activeRow.id} onClick={() => void approve(activeRow)}><CheckCircle2 className="h-4 w-4" /> Одобрить</Button> : null}
-                    {!isBlocked(activeRow) ? <Button disabled={!canUpdate || busyId === activeRow.id} onClick={() => { setReason(activeRow.onboardingNote ?? ''); setDialog({ kind: 'changes', restaurantId: activeRow.id }); }}>На доработку</Button> : null}
-                    {!isBlocked(activeRow) ? <Button kind="danger" disabled={!canUpdate || busyId === activeRow.id} onClick={() => { setReason(activeRow.onboardingNote ?? ''); setDialog({ kind: 'reject', restaurantId: activeRow.id }); }}>Отклонить</Button> : null}
-                    {!isBlocked(activeRow) ? <Button kind="danger" disabled={!canUpdate || busyId === activeRow.id} onClick={() => { setReason(activeRow.onboardingNote ?? ''); setDialog({ kind: 'block', restaurantId: activeRow.id }); }}><Ban className="h-4 w-4" /> Заблокировать</Button> : <Button disabled={!canUpdate || busyId === activeRow.id} onClick={() => setDialog({ kind: 'restore', restaurantId: activeRow.id })}>Снять блокировку</Button>}
-                  </div>
-                  {activeRow.onboardingNote ? <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900"><span className="font-semibold">Причина:</span> {activeRow.onboardingNote}</div> : null}
-                </DrawerSection>
-
-                <DrawerSection title="Публикация и работа" subtitle="Это три независимых состояния. Одно не включает другое автоматически.">
-                  <ToggleRow title={activeRow.isInApp ? 'Показывается клиентам' : 'Скрыт от клиентов'} description="Определяет наличие ресторана в клиентском приложении." active={activeRow.isInApp === true} disabled={!canUpdate || busyId === activeRow.id} onClick={() => void toggleVisible(activeRow)} />
-                  <ToggleRow title={activeRow.isAcceptingOrders ? 'Приём заказов включён' : 'Приём заказов остановлен'} description="Разрешает создание новых заказов после всех остальных проверок." active={activeRow.isAcceptingOrders === true} disabled={!canUpdate || busyId === activeRow.id} onClick={() => void toggleAccepting(activeRow)} />
-                  <ToggleRow title={activeRow.status === 'OPEN' ? 'Работа разрешена' : 'Работа остановлена'} description="Ручное разрешение работы ресторана независимо от графика." active={activeRow.status === 'OPEN'} disabled={!canUpdate || busyId === activeRow.id} onClick={() => void toggleWork(activeRow)} />
-                  <div className="mt-3 flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2.5"><div><div className="text-[12px] font-semibold">По графику сейчас</div><div className="mt-0.5 text-[11px] text-slate-400">{activeRow.workingHours || 'График не указан'}</div></div><Badge tone={activeRow.runtimeStatus === 'OPEN' ? 'success' : 'neutral'}>{activeRow.runtimeStatus === 'OPEN' ? 'Открыт' : 'Закрыт'}</Badge></div>
-                </DrawerSection>
-              </>
+              <DrawerSection title="Решение по ресторану" subtitle="Одобрение не включает показ клиентам и приём заказов автоматически.">
+                <div className="flex flex-wrap gap-2">
+                  {!isApproved(activeRow) && !isBlocked(activeRow) ? <Button kind="success" disabled={!canUpdate || busyId === activeRow.id} onClick={() => void approve(activeRow)}><CheckCircle2 className="h-4 w-4" /> Одобрить</Button> : null}
+                  {!isBlocked(activeRow) ? <Button disabled={!canUpdate || busyId === activeRow.id} onClick={() => { setReason(activeRow.onboardingNote ?? ''); setDialog({ kind: 'changes', restaurantId: activeRow.id }); }}>На доработку</Button> : null}
+                  {!isBlocked(activeRow) ? <Button kind="danger" disabled={!canUpdate || busyId === activeRow.id} onClick={() => { setReason(activeRow.onboardingNote ?? ''); setDialog({ kind: 'reject', restaurantId: activeRow.id }); }}>Отклонить</Button> : null}
+                  {!isBlocked(activeRow) ? <Button kind="danger" disabled={!canUpdate || busyId === activeRow.id} onClick={() => { setReason(activeRow.onboardingNote ?? ''); setDialog({ kind: 'block', restaurantId: activeRow.id }); }}><Ban className="h-4 w-4" /> Заблокировать</Button> : <Button disabled={!canUpdate || busyId === activeRow.id} onClick={() => setDialog({ kind: 'unblock', restaurantId: activeRow.id })}>Снять блокировку</Button>}
+                </div>
+                {activeRow.onboardingNote ? <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900"><span className="font-semibold">Причина:</span> {activeRow.onboardingNote}</div> : null}
+              </DrawerSection>
             )}
 
-            <DrawerSection title="Данные ресторана" subtitle="Поля разделены по смыслу. Изменения применяются только после сохранения.">
+            {!isArchived(activeRow) ? (
+              <DrawerSection title="Публикация и работа" subtitle="Три разных состояния. Одно не включает другое автоматически.">
+                <ToggleRow title={activeRow.isInApp ? 'Показывается клиентам' : 'Скрыт от клиентов'} description="Публикация — отвечает только за наличие ресторана в клиентском приложении." active={activeRow.isInApp === true} disabled={!canUpdate || busyId === activeRow.id} onClick={() => void toggleVisible(activeRow)} />
+                <ToggleRow title={activeRow.isAcceptingOrders ? 'Приём заказов включён' : 'Приём заказов остановлен'} description="Приём заказов — разрешает создавать новые заказы, если ресторан одобрен и открыт." active={activeRow.isAcceptingOrders === true} disabled={!canUpdate || busyId === activeRow.id} onClick={() => void toggleAccepting(activeRow)} />
+                <ToggleRow title={activeRow.status === 'OPEN' ? 'Работа разрешена' : 'Работа остановлена'} description="Ручное разрешение работы. График проверяется отдельно." active={activeRow.status === 'OPEN'} disabled={!canUpdate || busyId === activeRow.id} onClick={() => void toggleWork(activeRow)} />
+                <div className="mt-3 flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2.5"><div><div className="text-[12px] font-semibold">По графику сейчас</div><div className="mt-0.5 text-[11px] text-slate-400">{activeRow.workingHours || 'График не указан'}</div></div><Badge tone={activeRow.runtimeStatus === 'OPEN' ? 'success' : 'neutral'}>{activeRow.runtimeStatus === 'OPEN' ? 'Открыт' : 'Закрыт'}</Badge></div>
+              </DrawerSection>
+            ) : null}
+
+            <DrawerSection title="Названия и контакты" subtitle="Контакты ресторана и владельца используются для разных задач.">
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Название на русском"><input className={inputClass} value={editor.nameRu} onChange={(event) => setEditor({ ...editor, nameRu: event.target.value })} disabled={!canUpdate} /></Field>
-                <Field label="Название на казахском"><input className={inputClass} value={editor.nameKk} onChange={(event) => setEditor({ ...editor, nameKk: event.target.value })} disabled={!canUpdate} /></Field>
-                <Field label="Телефон ресторана" hint="Контакт самого филиала"><input className={inputClass} value={editor.phone} onChange={(event) => setEditor({ ...editor, phone: event.target.value })} disabled={!canUpdate} /></Field>
-                <Field label="Телефон владельца" hint="Определяет владельца и его доступ"><input className={inputClass} value={editor.ownerPhone} onChange={(event) => setEditor({ ...editor, ownerPhone: event.target.value })} disabled={!canUpdate} /></Field>
-                <div className="sm:col-span-2"><Field label="Адрес"><input className={inputClass} value={editor.address} onChange={(event) => setEditor({ ...editor, address: event.target.value })} disabled={!canUpdate} /></Field></div>
-                <div className="sm:col-span-2"><Field label="График работы" hint="Например: 09:00-23:00"><input className={inputClass} value={editor.workingHours} onChange={(event) => setEditor({ ...editor, workingHours: event.target.value })} disabled={!canUpdate} /></Field></div>
-                <div className="sm:col-span-2"><Field label="Описание на русском"><textarea className={textareaClass} rows={3} value={editor.descriptionRu} onChange={(event) => setEditor({ ...editor, descriptionRu: event.target.value })} disabled={!canUpdate} /></Field></div>
-                <div className="sm:col-span-2"><Field label="Описание на казахском"><textarea className={textareaClass} rows={3} value={editor.descriptionKk} onChange={(event) => setEditor({ ...editor, descriptionKk: event.target.value })} disabled={!canUpdate} /></Field></div>
+                <Field label="Название ресторана на русском"><input className={inputClass} value={editor.nameRu} onChange={(event) => setEditor({ ...editor, nameRu: event.target.value })} disabled={!canUpdate || isArchived(activeRow)} /></Field>
+                <Field label="Название ресторана на казахском"><input className={inputClass} value={editor.nameKk} onChange={(event) => setEditor({ ...editor, nameKk: event.target.value })} disabled={!canUpdate || isArchived(activeRow)} /></Field>
+                <Field label="Телефон ресторана" hint="Номер конкретного филиала для клиентов и связи"><input className={inputClass} value={editor.phone} onChange={(event) => setEditor({ ...editor, phone: event.target.value })} disabled={!canUpdate || isArchived(activeRow)} /></Field>
+                <Field label="Телефон владельца" hint="Аккаунт владельца и его доступ к этому ресторану"><input className={inputClass} value={editor.ownerPhone} onChange={(event) => setEditor({ ...editor, ownerPhone: event.target.value })} disabled={!canUpdate || isArchived(activeRow)} /></Field>
               </div>
-              <div className="mt-4 flex justify-end"><Button kind="primary" disabled={!canUpdate || busyId === activeRow.id} onClick={() => void saveEditor(activeRow)}><Save className="h-4 w-4" /> Сохранить данные</Button></div>
             </DrawerSection>
 
-            <DrawerSection title="Обложка" subtitle="Изображение проверяется и безопасно обрабатывается перед сохранением.">
+            <DrawerSection title="Адрес и график" subtitle="График определяет фактическую доступность ресторана по времени.">
+              <div className="grid gap-4">
+                <Field label="Адрес ресторана"><input className={inputClass} value={editor.address} onChange={(event) => setEditor({ ...editor, address: event.target.value })} disabled={!canUpdate || isArchived(activeRow)} /></Field>
+                <Field label="График работы" hint="Формат: 09:00-23:00. Ночной график также поддерживается."><input className={inputClass} value={editor.workingHours} onChange={(event) => setEditor({ ...editor, workingHours: event.target.value })} disabled={!canUpdate || isArchived(activeRow)} /></Field>
+              </div>
+            </DrawerSection>
+
+            <DrawerSection title="Описание" subtitle="Русский и казахский тексты хранятся отдельно.">
+              <div className="grid gap-4">
+                <Field label="Описание на русском"><textarea className={textareaClass} rows={3} value={editor.descriptionRu} onChange={(event) => setEditor({ ...editor, descriptionRu: event.target.value })} disabled={!canUpdate || isArchived(activeRow)} /></Field>
+                <Field label="Описание на казахском"><textarea className={textareaClass} rows={3} value={editor.descriptionKk} onChange={(event) => setEditor({ ...editor, descriptionKk: event.target.value })} disabled={!canUpdate || isArchived(activeRow)} /></Field>
+              </div>
+              {!isArchived(activeRow) ? <div className="mt-4 flex justify-end"><Button kind="primary" disabled={!canUpdate || busyId === activeRow.id} onClick={() => void saveEditor(activeRow)}><Save className="h-4 w-4" /> Сохранить данные</Button></div> : null}
+            </DrawerSection>
+
+            <DrawerSection title="Обложка" subtitle="Файл проверяется, очищается от метаданных и пересохраняется перед использованием.">
               <div className="flex items-center gap-4">
                 <div className="flex h-[96px] w-[150px] shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50">{activeRow.coverImageUrl ? <img src={absoluteImage(activeRow.coverImageUrl)} alt="Обложка ресторана" className="h-full w-full object-cover" /> : <ImageIcon className="h-6 w-6 text-slate-300" />}</div>
-                <div><div className="text-[11px] text-slate-400">JPG, PNG или WebP · до 8 МБ</div><input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(event) => void uploadCover(event.target.files?.[0] ?? null)} /><Button className="mt-3" disabled={!canUpdate || uploading} onClick={() => fileRef.current?.click()}><Upload className="h-4 w-4" /> {uploading ? 'Обрабатываю' : 'Выбрать изображение'}</Button></div>
+                <div><div className="text-[11px] text-slate-400">JPG, PNG или WebP · до 8 МБ</div><input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(event) => void uploadCover(event.target.files?.[0] ?? null)} /><Button className="mt-3" disabled={!canUpdate || uploading || isArchived(activeRow)} onClick={() => fileRef.current?.click()}><Upload className="h-4 w-4" /> {uploading ? 'Обрабатываю' : 'Выбрать изображение'}</Button></div>
               </div>
             </DrawerSection>
 
-            <DrawerSection title="Порядок показа" subtitle="Не влияет на решение по ресторану и приём заказов.">
-              <ToggleRow title={activeRow.isPinned ? 'Ресторан закреплён' : 'Без закрепления'} description="Закрепление повышает приоритет в выдаче." active={activeRow.isPinned === true} disabled={!canUpdate || busyId === activeRow.id} onClick={() => void togglePinned(activeRow)} />
-              <ToggleRow title={activeRow.useRandom ? 'Случайный порядок включён' : 'Случайный порядок выключен'} description="Используется только в поддерживаемых подборках." active={activeRow.useRandom === true} disabled={!canUpdate || busyId === activeRow.id} onClick={() => void patch(activeRow, { useRandom: activeRow.useRandom !== true }, activeRow.useRandom ? 'Случайный порядок выключен.' : 'Случайный порядок включён.')} />
-              <div className="mt-3 max-w-[220px]"><Field label="Порядок показа"><input className={inputClass} value={editor.sortOrder} onChange={(event) => setEditor({ ...editor, sortOrder: event.target.value })} inputMode="numeric" disabled={!canUpdate} /></Field></div>
-            </DrawerSection>
+            {!isArchived(activeRow) ? (
+              <DrawerSection title="Порядок показа" subtitle="Отдельно от публикации и приёма заказов.">
+                <ToggleRow title={activeRow.isPinned ? 'Ресторан закреплён' : 'Без закрепления'} description="Закрепление повышает приоритет в выдаче." active={activeRow.isPinned === true} disabled={!canUpdate || busyId === activeRow.id} onClick={() => void togglePinned(activeRow)} />
+                <ToggleRow title={activeRow.useRandom ? 'Случайный порядок включён' : 'Случайный порядок выключен'} description="Используется только в поддерживаемых подборках." active={activeRow.useRandom === true} disabled={!canUpdate || busyId === activeRow.id} onClick={() => void patch(activeRow, { useRandom: activeRow.useRandom !== true }, activeRow.useRandom ? 'Случайный порядок выключен.' : 'Случайный порядок включён.')} />
+                <div className="mt-3 max-w-[220px]"><Field label="Порядок показа"><input className={inputClass} value={editor.sortOrder} onChange={(event) => setEditor({ ...editor, sortOrder: event.target.value })} inputMode="numeric" disabled={!canUpdate} /></Field></div>
+              </DrawerSection>
+            ) : null}
 
             <DrawerSection title="Разделы и филиалы">
               <div className="grid grid-cols-2 gap-2">
@@ -885,7 +1075,7 @@ export function RestaurantsManagementPage() {
                 <Button onClick={() => router.push(`/layout-20/restaurants/${activeRow.id}/menu`)}><UtensilsCrossed className="h-4 w-4" /> Меню</Button>
                 <Button onClick={() => router.push(`/layout-20/orders?restaurantId=${encodeURIComponent(activeRow.id)}`)}>Заказы</Button>
                 <Button onClick={() => router.push(`/layout-20/restaurants/${activeRow.id}/reviews`)}>Отзывы</Button>
-                <Button className="col-span-2" disabled={!canUpdate} onClick={() => openBranch(activeRow)}><Plus className="h-4 w-4" /> Добавить филиал этому владельцу</Button>
+                {!isArchived(activeRow) ? <Button className="col-span-2" disabled={!canUpdate} onClick={() => openBranch(activeRow)}><Plus className="h-4 w-4" /> Добавить филиал этому владельцу</Button> : null}
               </div>
             </DrawerSection>
 
