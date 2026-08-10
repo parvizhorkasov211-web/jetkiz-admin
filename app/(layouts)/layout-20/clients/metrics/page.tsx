@@ -1,287 +1,52 @@
-"use client";
+'use client';
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiFetch } from "@/lib/api";
-import { ClientMetricsHeader } from "@/components/ui/widgets/client-metrics/ClientMetricsHeader";
-import { ClientMetricsKpiCards } from "@/components/ui/widgets/client-metrics/ClientMetricsKpiCards";
-import { ClientMetricsCharts } from "@/components/ui/widgets/client-metrics/ClientMetricsCharts";
-import { ClientMetricsAnalytics } from "@/components/ui/widgets/client-metrics/ClientMetricsAnalytics";
-import { ClientMetricsRetention } from "@/components/ui/widgets/client-metrics/ClientMetricsRetention";
-import { ClientMetricsTable } from "@/components/ui/widgets/client-metrics/ClientMetricsTable";
-import type {
-  ClientActivityPoint,
-  ClientDevicePlatform,
-  ClientEventStat,
-  ClientLanguageStat,
-  ClientMetricKpi,
-  ClientMetricsPeriod,
-  ClientMetricsSummary,
-  ClientMetricsTableItem,
-  ClientRetentionItem,
-} from "@/components/ui/widgets/client-metrics/types";
+import { Download, RefreshCw, Search, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { apiFetch } from '@/lib/api';
 
-type RealtimeResponse = {
-  summary: ClientMetricsSummary;
-};
+type Period = 'today' | '7d' | '14d' | '30d' | 'month' | 'year';
+type Summary = { totalClients:number; activeToday:number; newThisWeek:number; totalOrders:number; avgOrdersPerClient:number; totalRevenue:number };
+type ActivityPoint = { bucketStart:string; activeClients:number; newClients:number };
+type Platform = { platform:string; count:number; pct:number };
+type Language = { language:string; count:number; pct:number };
+type EventStat = { eventName:string; count:number };
+type Retention = { d1:number|null; d7:number|null; d30:number|null; methodology:string; cohorts:Array<{cohortDate:string;cohortSize:number;d1:number|null;d7:number|null;d30:number|null}> };
+type ClientRow = { id:string; name:string; phone:string; email?:string|null; stateLabel:string; segment:'NEW'|'REGULAR'|'VIP'; totalOrders:number; deliveredCount:number; totalSpent:number; lastOrderAt:string|null };
+type ClientList = { items:ClientRow[]; meta:{page:number;limit:number;total:number;pages:number} };
 
-type ActivityResponse = {
-  points?: ClientActivityPoint[];
-};
+const EMPTY:Summary={totalClients:0,activeToday:0,newThisWeek:0,totalOrders:0,avgOrdersPerClient:0,totalRevenue:0};
+function money(v:number){return `${Math.round(Number(v||0)).toLocaleString('ru-RU')} ₸`}
+function date(v:string|null){if(!v)return'—';const d=new Date(v);return Number.isNaN(d.getTime())?'—':d.toLocaleDateString('ru-RU')}
+function platform(v:string){const k=v.toUpperCase();return k==='ANDROID'?'Android':k==='IOS'?'iOS':k==='WEB'?'Веб':'Не определено'}
+function language(v:string){const k=v.toLowerCase();return k==='kk'?'Казахский':k==='ru'?'Русский':v}
+function segment(v:string){return v==='VIP'?'VIP':v==='REGULAR'?'Постоянный':'Новый'}
+function eventLabel(v:string){const map:Record<string,string>={app_open:'Открытие приложения',restaurant_view:'Просмотр ресторана',restaurant_click:'Переход в ресторан',product_view:'Просмотр блюда',product_click:'Переход к блюду',add_to_cart:'Добавление в корзину',remove_from_cart:'Удаление из корзины',checkout_start:'Начало оформления',order_created:'Создание заказа',order_paid:'Оплата заказа',favorite_add:'Добавление в избранное',favorite_remove:'Удаление из избранного'};return map[v]||v.replaceAll('_',' ')}
+function friendlyError(e:unknown,fallback:string){if(e&&typeof e==='object'){const s=(e as {status?:unknown}).status;if(s===401)return'Сессия истекла. Войдите снова.';if(s===403)return'У вас нет прав для просмотра этих данных.';if(typeof s==='number'&&s>=500)return'Сервис статистики временно недоступен.'}return fallback}
 
-type DevicesResponse = {
-  platforms?: ClientDevicePlatform[];
-};
+export default function ClientMetricsPage(){
+  const [period,setPeriod]=useState<Period>('7d');const [summary,setSummary]=useState<Summary>(EMPTY);const [activity,setActivity]=useState<ActivityPoint[]>([]);const [devices,setDevices]=useState<Platform[]>([]);const [languages,setLanguages]=useState<Language[]>([]);const [events,setEvents]=useState<EventStat[]>([]);const [retention,setRetention]=useState<Retention>({d1:null,d7:null,d30:null,methodology:'',cohorts:[]});const [analyticsLoading,setAnalyticsLoading]=useState(true);const [analyticsError,setAnalyticsError]=useState<string|null>(null);
+  const [input,setInput]=useState('');const [q,setQ]=useState('');const [page,setPage]=useState(1);const limit=25;const [clients,setClients]=useState<ClientList>({items:[],meta:{page:1,limit,total:0,pages:0}});const [listLoading,setListLoading]=useState(true);const [listError,setListError]=useState<string|null>(null);const [exporting,setExporting]=useState(false);
+  useEffect(()=>{const timer=window.setTimeout(()=>{setQ(input.trim());setPage(1)},350);return()=>window.clearTimeout(timer)},[input]);
 
-type LanguagesResponse = {
-  languages?: ClientLanguageStat[];
-};
+  const loadAnalytics=useCallback(async()=>{try{setAnalyticsLoading(true);setAnalyticsError(null);const[r,a,d,l,e,ret]=await Promise.allSettled([apiFetch<{summary:Summary}>('/client-metrics/realtime'),apiFetch<{points:ActivityPoint[]}>(`/client-metrics/activity?range=${period}`),apiFetch<{platforms:Platform[]}>('/client-metrics/devices'),apiFetch<{languages:Language[]}>('/client-metrics/languages'),apiFetch<{topEvents:EventStat[]}>(`/client-metrics/events?range=${period}`),apiFetch<Retention>('/client-metrics/retention')]);if(r.status==='fulfilled')setSummary(r.value.summary??EMPTY);if(a.status==='fulfilled')setActivity(a.value.points??[]);if(d.status==='fulfilled')setDevices(d.value.platforms??[]);if(l.status==='fulfilled')setLanguages(l.value.languages??[]);if(e.status==='fulfilled')setEvents(e.value.topEvents??[]);if(ret.status==='fulfilled')setRetention(ret.value);const failed=[r,a,d,l,e,ret].filter(x=>x.status==='rejected').length;if(failed===6)setAnalyticsError('Не удалось загрузить статистику клиентов.')}catch(err){setAnalyticsError(friendlyError(err,'Не удалось загрузить статистику клиентов.'))}finally{setAnalyticsLoading(false)}},[period]);
+  const listQuery=useMemo(()=>{const p=new URLSearchParams({page:String(page),limit:String(limit),segment:'ALL',state:'ALL'});if(q)p.set('q',q);return p.toString()},[page,q]);
+  const loadList=useCallback(async()=>{try{setListLoading(true);setListError(null);const r=await apiFetch<any>(`/admin/clients?${listQuery}`);setClients({items:Array.isArray(r?.items)?r.items:[],meta:r?.meta??{page,limit,total:0,pages:0}})}catch(err){setClients({items:[],meta:{page,limit,total:0,pages:0}});setListError(friendlyError(err,'Не удалось загрузить список клиентов.'))}finally{setListLoading(false)}},[listQuery,page]);
+  useEffect(()=>{void loadAnalytics()},[loadAnalytics]);useEffect(()=>{void loadList()},[loadList]);
 
-type EventsResponse = {
-  topEvents?: ClientEventStat[];
-};
+  async function exportCsv(){try{setExporting(true);setListError(null);const p=new URLSearchParams({segment:'ALL',state:'ALL'});if(q)p.set('q',q);const r=await fetch(`/api/proxy/admin/clients/export?${p}`,{credentials:'include',cache:'no-store'});if(!r.ok)throw Object.assign(new Error(),{status:r.status});const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`klienty-${new Date().toISOString().slice(0,10)}.csv`;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url)}catch(err){setListError(friendlyError(err,'Не удалось скачать отчёт.'))}finally{setExporting(false)}}
+  const maxActivity=Math.max(1,...activity.flatMap(x=>[x.activeClients,x.newClients]));const pages=Math.max(1,clients.meta.pages||Math.ceil(clients.meta.total/limit));
 
-type RetentionResponse = {
-  cohorts?: Array<{
-    d1?: number;
-    d7?: number;
-    d30?: number;
-  }>;
-};
-
-type ListResponse = {
-  items?: ClientMetricsTableItem[];
-  meta?: {
-    page: number;
-    limit: number;
-    total: number;
-  };
-};
-
-const EMPTY_SUMMARY: ClientMetricsSummary = {
-  totalClients: 0,
-  activeToday: 0,
-  newThisWeek: 0,
-  totalOrders: 0,
-  avgOrdersPerClient: 0,
-  totalRevenue: 0,
-};
-
-function formatNumber(value: number) {
-  return new Intl.NumberFormat("ru-RU").format(Number(value) || 0);
+  return <main className="min-h-screen bg-[#f7f7f8] px-5 py-6 text-slate-950 sm:px-6 lg:px-8"><div className="w-full space-y-4">
+    <header className="flex flex-wrap items-end justify-between gap-4"><div><h1 className="text-[28px] font-black tracking-[-0.03em]">Метрики клиентов</h1><p className="mt-1 text-[12px] font-medium text-slate-500">Реальная активность, устройства, удержание и клиентская база</p></div><div className="flex gap-2"><select value={period} onChange={e=>setPeriod(e.target.value as Period)} className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-bold"><option value="today">Сегодня</option><option value="7d">7 дней</option><option value="14d">14 дней</option><option value="30d">30 дней</option><option value="month">Этот месяц</option><option value="year">Этот год</option></select><button type="button" onClick={()=>void loadAnalytics()} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-[13px] font-bold"><RefreshCw className={`h-4 w-4 ${analyticsLoading?'animate-spin':''}`}/>Обновить</button></div></header>
+    {analyticsError&&<div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-[12px] font-semibold text-red-700">{analyticsError}</div>}
+    <section className="grid grid-cols-2 overflow-hidden rounded-lg border border-slate-200 bg-white md:grid-cols-3 xl:grid-cols-6"><Kpi label="Всего клиентов" value={summary.totalClients.toLocaleString('ru-RU')}/><Kpi label="Активны сегодня" value={summary.activeToday.toLocaleString('ru-RU')}/><Kpi label="Новые за 7 дней" value={summary.newThisWeek.toLocaleString('ru-RU')}/><Kpi label="Всего заказов" value={summary.totalOrders.toLocaleString('ru-RU')}/><Kpi label="Заказов на клиента" value={summary.avgOrdersPerClient.toLocaleString('ru-RU',{maximumFractionDigits:2})}/><Kpi label="Оборот доставок" value={money(summary.totalRevenue)}/></section>
+    <div className="grid gap-4 xl:grid-cols-2"><Panel title="Активность по дням" subtitle="Уникальные клиенты по событиям приложения"><div className="p-5"><div className="flex h-56 items-end gap-1 overflow-x-auto border-b border-slate-200 pb-1">{activity.length?activity.map(x=><div key={x.bucketStart} className="flex h-full min-w-[26px] flex-1 items-end justify-center gap-[2px]" title={`${x.bucketStart}: активные ${x.activeClients}, новые ${x.newClients}`}><div className="w-[8px] rounded-t bg-slate-900" style={{height:`${Math.max(2,(x.activeClients/maxActivity)*100)}%`}}/><div className="w-[8px] rounded-t bg-emerald-500" style={{height:`${Math.max(2,(x.newClients/maxActivity)*100)}%`}}/></div>):<Empty text="За период нет активности"/>}</div><div className="mt-3 flex gap-5 text-[10px] font-bold text-slate-500"><span>■ Активные</span><span className="text-emerald-600">■ Новые</span></div></div></Panel><Panel title="Устройства" subtitle="Платформа берётся из реальных зарегистрированных устройств"><div className="divide-y divide-slate-100">{devices.length?devices.map(x=><Row key={x.platform} label={platform(x.platform)} value={`${x.count} · ${x.pct}%`}/>):<Empty text="Данных об устройствах нет"/>}</div></Panel></div>
+    <div className="grid gap-4 xl:grid-cols-3"><Panel title="Языки" subtitle="Настройки клиентов"><div className="divide-y divide-slate-100">{languages.length?languages.map(x=><Row key={x.language} label={language(x.language)} value={`${x.count} · ${x.pct}%`}/>):<Empty text="Язык ещё не определён"/>}</div></Panel><Panel title="Популярные действия" subtitle="События за выбранный период"><div className="max-h-[320px] overflow-y-auto divide-y divide-slate-100">{events.length?events.map(x=><Row key={x.eventName} label={eventLabel(x.eventName)} value={x.count.toLocaleString('ru-RU')}/>):<Empty text="Событий за период нет"/>}</div></Panel><Panel title="Удержание" subtitle={retention.methodology||'По повторным доставленным заказам'}><div className="grid grid-cols-3 divide-x divide-slate-200"><Retention label="День 1" value={retention.d1}/><Retention label="День 7" value={retention.d7}/><Retention label="День 30" value={retention.d30}/></div><div className="border-t border-slate-100 px-4 py-3 text-[10px] leading-4 text-slate-400">Пустое значение означает, что подходящих зрелых когорт ещё нет, а не нулевое удержание.</div></Panel></div>
+    <Panel title="Клиенты" subtitle={`${clients.meta.total.toLocaleString('ru-RU')} в списке`} right={<button type="button" onClick={()=>void exportCsv()} disabled={exporting} className="inline-flex h-9 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-bold text-emerald-700 disabled:opacity-50"><Download className="h-4 w-4"/>{exporting?'Подготовка':'Экспорт CSV'}</button>}><div className="border-b border-slate-200 p-3"><div className="relative max-w-[540px]"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"/><input value={input} onChange={e=>setInput(e.target.value)} placeholder="Поиск по имени, телефону или почте" className="h-10 w-full rounded-lg border border-slate-200 pl-10 pr-10 text-[13px] font-semibold outline-none"/>{input&&<button type="button" onClick={()=>setInput('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"><X className="h-4 w-4"/></button>}</div></div>{listError&&<div className="border-b border-red-200 bg-red-50 px-4 py-3 text-[12px] font-semibold text-red-700">{listError}</div>}<div className="overflow-x-auto"><table className="min-w-[900px] w-full"><thead><tr className="border-b border-slate-200 bg-slate-50 text-left text-[10px] font-black uppercase text-slate-400"><th className="px-4 py-3">Клиент</th><th className="px-4 py-3">Состояние</th><th className="px-4 py-3">Сегмент</th><th className="px-4 py-3 text-right">Заказы</th><th className="px-4 py-3 text-right">Доставлено</th><th className="px-4 py-3 text-right">Потрачено</th><th className="px-4 py-3">Последний заказ</th></tr></thead><tbody>{listLoading&&clients.items.length===0?<tr><td colSpan={7} className="h-24 animate-pulse bg-slate-50"/></tr>:clients.items.length?clients.items.map(c=><tr key={c.id} className="border-b border-slate-100 text-[12px] font-semibold"><td className="px-4 py-3.5"><b>{c.name}</b><div className="mt-1 text-[10px] text-slate-400">{c.phone}</div></td><td className="px-4 py-3.5">{c.stateLabel}</td><td className="px-4 py-3.5">{segment(c.segment)}</td><td className="px-4 py-3.5 text-right font-black">{c.totalOrders}</td><td className="px-4 py-3.5 text-right font-black">{c.deliveredCount}</td><td className="px-4 py-3.5 text-right font-black">{money(c.totalSpent)}</td><td className="px-4 py-3.5">{date(c.lastOrderAt)}</td></tr>):<tr><td colSpan={7}><Empty text="Клиенты не найдены"/></td></tr>}</tbody></table></div><div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 text-[12px] text-slate-500"><span>Страница {page} из {pages}</span><div className="flex gap-2"><button type="button" disabled={page<=1||listLoading} onClick={()=>setPage(v=>Math.max(1,v-1))} className="h-9 rounded-lg border border-slate-200 px-4 font-bold disabled:opacity-40">Назад</button><button type="button" disabled={page>=pages||listLoading} onClick={()=>setPage(v=>v+1)} className="h-9 rounded-lg border border-slate-200 px-4 font-bold disabled:opacity-40">Вперёд</button></div></div></Panel>
+  </div></main>
 }
-
-function formatDecimal(value: number) {
-  return new Intl.NumberFormat("ru-RU", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-  }).format(Number(value) || 0);
-}
-
-function formatMoney(value: number) {
-  return `${new Intl.NumberFormat("ru-RU").format(Number(value) || 0)} ₸`;
-}
-
-export default function ClientMetricsPage() {
-  const [period, setPeriod] = useState<ClientMetricsPeriod>("7d");
-  const [loading, setLoading] = useState(false);
-  const [q, setQ] = useState("");
-
-  const [summary, setSummary] = useState<ClientMetricsSummary>(EMPTY_SUMMARY);
-  const [activity, setActivity] = useState<ClientActivityPoint[]>([]);
-  const [devices, setDevices] = useState<ClientDevicePlatform[]>([]);
-  const [languages, setLanguages] = useState<ClientLanguageStat[]>([]);
-  const [events, setEvents] = useState<ClientEventStat[]>([]);
-  const [retention, setRetention] = useState<ClientRetentionItem[]>([]);
-  const [clients, setClients] = useState<ClientMetricsTableItem[]>([]);
-  const [totalClients, setTotalClients] = useState(0);
-
-  const loadData = useCallback(async () => {
-    setLoading(true);
-
-    try {
-      const [
-        realtimeResult,
-        activityResult,
-        devicesResult,
-        languagesResult,
-        eventsResult,
-        retentionResult,
-        listResult,
-      ] = await Promise.allSettled([
-        apiFetch<RealtimeResponse>("/client-metrics/realtime"),
-        apiFetch<ActivityResponse>(`/client-metrics/activity?range=${period}`),
-        apiFetch<DevicesResponse>("/client-metrics/devices"),
-        apiFetch<LanguagesResponse>("/client-metrics/languages"),
-        apiFetch<EventsResponse>(`/client-metrics/events?range=${period}`),
-        apiFetch<RetentionResponse>("/client-metrics/retention"),
-        apiFetch<ListResponse>(
-          `/client-metrics/list?page=1&limit=25&q=${encodeURIComponent(q)}`,
-        ),
-      ]);
-
-      if (realtimeResult.status === "fulfilled") {
-        setSummary(realtimeResult.value.summary ?? EMPTY_SUMMARY);
-      }
-
-      if (activityResult.status === "fulfilled") {
-        setActivity(activityResult.value.points ?? []);
-      }
-
-      if (devicesResult.status === "fulfilled") {
-        setDevices(devicesResult.value.platforms ?? []);
-      }
-
-      if (languagesResult.status === "fulfilled") {
-        setLanguages(languagesResult.value.languages ?? []);
-      }
-
-      if (eventsResult.status === "fulfilled") {
-        setEvents(eventsResult.value.topEvents ?? []);
-      }
-
-      if (retentionResult.status === "fulfilled") {
-        const first = retentionResult.value.cohorts?.[0];
-
-        setRetention([
-          { label: "День 1", value: first?.d1 ?? 0 },
-          { label: "День 7", value: first?.d7 ?? 0 },
-          { label: "День 30", value: first?.d30 ?? 0 },
-        ]);
-      }
-
-      if (listResult.status === "fulfilled") {
-        setClients(listResult.value.items ?? []);
-        setTotalClients(listResult.value.meta?.total ?? 0);
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [period, q]);
-
-  useEffect(() => {
-    void loadData();
-  }, [loadData]);
-
-  async function exportClients() {
-    const response = await fetch(
-      `/api/proxy/client-metrics/export?q=${encodeURIComponent(q)}`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      },
-    );
-
-    if (!response.ok) {
-      console.error("Client metrics export failed", response.status);
-      return;
-    }
-
-    const blob = await response.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-
-    link.href = objectUrl;
-    link.download = `client-metrics-${Date.now()}.xlsx`;
-
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-
-    URL.revokeObjectURL(objectUrl);
-  }
-
-  const kpis = useMemo<ClientMetricKpi[]>(
-    () => [
-      {
-        key: "totalClients",
-        title: "Всего клиентов",
-        value: formatNumber(summary.totalClients),
-        subtitle: "клиентов в базе",
-        trend: { value: "реальные данные", direction: "neutral" },
-      },
-      {
-        key: "activeToday",
-        title: "Активные сегодня",
-        value: formatNumber(summary.activeToday),
-        subtitle: "открывали приложение",
-        trend: { value: "по lastActiveAt", direction: "neutral" },
-      },
-      {
-        key: "newThisWeek",
-        title: "Новые за неделю",
-        value: formatNumber(summary.newThisWeek),
-        subtitle: "новые регистрации",
-        trend: { value: "за последние 7 дней", direction: "neutral" },
-      },
-      {
-        key: "totalOrders",
-        title: "Всего заказов",
-        value: formatNumber(summary.totalOrders),
-        subtitle: "за всё время",
-        trend: { value: "из базы заказов", direction: "neutral" },
-      },
-      {
-        key: "avgOrdersPerClient",
-        title: "Ср. заказов",
-        value: formatDecimal(summary.avgOrdersPerClient),
-        subtitle: "на одного клиента",
-        trend: { value: "расчёт backend", direction: "neutral" },
-      },
-      {
-        key: "totalRevenue",
-        title: "Сумма заказов",
-        value: formatMoney(summary.totalRevenue),
-        subtitle: "DELIVERED заказы",
-        trend: { value: "оборот клиентов", direction: "neutral" },
-      },
-    ],
-    [summary],
-  );
-
-  return (
-    <main
-      style={{
-        minHeight: "100vh",
-        background: "#F1F5F9",
-        padding: 24,
-      }}
-    >
-      <ClientMetricsHeader
-        period={period}
-        onPeriodChange={setPeriod}
-        onRefresh={loadData}
-        loading={loading}
-      />
-
-      <ClientMetricsKpiCards items={kpis} />
-
-      <ClientMetricsCharts activity={activity} devices={devices} />
-
-      <ClientMetricsAnalytics
-        languages={languages}
-        events={events}
-        averages={{
-          avgOrdersPerClient: summary.avgOrdersPerClient,
-          avgCheck:
-            summary.totalOrders > 0
-              ? summary.totalRevenue / summary.totalOrders
-              : 0,
-          totalRevenue: summary.totalRevenue,
-        }}
-      />
-
-      <ClientMetricsRetention items={retention} />
-
-      <ClientMetricsTable
-        items={clients}
-        total={totalClients}
-        page={1}
-        limit={25}
-        q={q}
-        onSearch={setQ}
-        onExport={exportClients}
-      />
-    </main>
-  );
-}
+function Kpi({label,value}:{label:string;value:string|number}){return <div className="border-r border-slate-200 px-4 py-4 last:border-r-0"><div className="text-[10px] font-black uppercase tracking-[.06em] text-slate-400">{label}</div><div className="mt-2 text-[22px] font-black">{value}</div></div>}
+function Panel({title,subtitle,right,children}:{title:string;subtitle?:string;right?:React.ReactNode;children:React.ReactNode}){return <section className="overflow-hidden rounded-lg border border-slate-200 bg-white"><div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3.5"><div><h2 className="text-[14px] font-black">{title}</h2>{subtitle&&<p className="mt-1 text-[10px] font-medium text-slate-400">{subtitle}</p>}</div>{right}</div>{children}</section>}
+function Row({label,value}:{label:string;value:string}){return <div className="flex items-center justify-between gap-4 px-4 py-3.5 text-[12px]"><span className="font-bold text-slate-700">{label}</span><span className="font-black text-slate-950">{value}</span></div>}
+function Retention({label,value}:{label:string;value:number|null}){return <div className="px-3 py-6 text-center"><div className="text-[10px] font-bold uppercase text-slate-400">{label}</div><div className="mt-2 text-[24px] font-black">{value===null?'—':`${value}%`}</div></div>}
+function Empty({text}:{text:string}){return <div className="w-full px-4 py-8 text-center text-[12px] font-medium text-slate-400">{text}</div>}
