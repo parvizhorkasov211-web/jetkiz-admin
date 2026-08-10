@@ -37,10 +37,12 @@ export type CourierMapPoint = {
 export type CourierMapSummary = {
   total: number;
   online: number;
+  onlineIdle: number;
   busy: number;
   offline: number;
   blocked: number;
   staleOnline: number;
+  busyWithoutFreshLocation: number;
   trackedNow: number;
 };
 
