@@ -1,397 +1,459 @@
-"use client";
+'use client';
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
-import { apiFetch } from "@/lib/api";
+import {
+  ChevronRight,
+  Download,
+  RefreshCw,
+  Search,
+  ShieldBan,
+  UserRound,
+  UsersRound,
+  X,
+} from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
-type Segment = "NEW" | "REGULAR" | "VIP";
+import { apiFetch } from '@/lib/api';
 
-type Row = {
+type Segment = 'NEW' | 'REGULAR' | 'VIP';
+type ClientState = 'ACTIVE' | 'BLOCKED' | 'INACTIVE';
+
+type ClientRow = {
   id: string;
   phone: string;
-  name: string | null;
-  ordersCount: number;
+  email?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  name: string;
+  isActive: boolean;
+  isBlocked: boolean;
+  state: ClientState;
+  stateLabel: string;
+  segment: Segment;
+  totalOrders: number;
+  deliveredCount: number;
+  totalSpent: number;
   lastOrderAt: string | null;
+  lastOrderNumber: number | null;
   lastOrderStatus: string | null;
   lastOrderTotal: number | null;
-  segment: Segment;
+  lastActiveAt: string | null;
+  createdAt: string;
+  piiVisible?: boolean;
 };
 
-function segmentLabel(s: Segment) {
-  if (s === "NEW") return "Первичный";
-  if (s === "VIP") return "VIP";
-  return "Постоянный";
-}
-
-function segmentClass(s: Segment) {
-  if (s === "NEW") {
-    return "bg-amber-50 text-amber-700 border-amber-200";
-  }
-  if (s === "VIP") {
-    return "bg-emerald-50 text-emerald-700 border-emerald-200";
-  }
-  return "bg-blue-50 text-blue-700 border-blue-200";
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "-";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString("ru-RU");
-}
-
-function formatMoney(value: number | null) {
-  if (value == null) return "-";
-  return `${Number(value).toLocaleString("ru-RU")} ₸`;
-}
-
-function getStatusUi(status?: string | null) {
-  const s = (status ?? "").toUpperCase();
-
-  if (["DELIVERED", "COMPLETED"].includes(s)) {
-    return {
-      label: "Доставлен",
-      cls: "bg-emerald-50 text-emerald-700 border-emerald-200",
-      dot: "bg-emerald-500",
-    };
-  }
-
-  if (["CANCELLED", "CANCELED", "REJECTED"].includes(s)) {
-    return {
-      label: "Отменён",
-      cls: "bg-rose-50 text-rose-700 border-rose-200",
-      dot: "bg-rose-500",
-    };
-  }
-
-  if (
-    ["COURIER_ASSIGNED", "ASSIGNED", "ON_THE_WAY", "IN_DELIVERY", "PICKED_UP"].includes(s)
-  ) {
-    return {
-      label: "В доставке",
-      cls: "bg-blue-50 text-blue-700 border-blue-200",
-      dot: "bg-blue-500",
-    };
-  }
-
-  if (["CREATED", "NEW", "PENDING", "PREPARING"].includes(s)) {
-    return {
-      label: "Новый",
-      cls: "bg-amber-50 text-amber-700 border-amber-200",
-      dot: "bg-amber-500",
-    };
-  }
-
-  return {
-    label: status || "-",
-    cls: "bg-slate-50 text-slate-700 border-slate-200",
-    dot: "bg-slate-400",
+type ClientListResponse = {
+  items: ClientRow[];
+  meta: {
+    page: number;
+    limit: number;
+    total: number;
+    pages: number;
   };
+  summary: {
+    total: number;
+    active: number;
+    blocked: number;
+    inactive: number;
+    segments: { NEW: number; REGULAR: number; VIP: number };
+  };
+};
+
+const EMPTY: ClientListResponse = {
+  items: [],
+  meta: { page: 1, limit: 25, total: 0, pages: 0 },
+  summary: {
+    total: 0,
+    active: 0,
+    blocked: 0,
+    inactive: 0,
+    segments: { NEW: 0, REGULAR: 0, VIP: 0 },
+  },
+};
+
+function segmentLabel(value: Segment) {
+  if (value === 'VIP') return 'VIP';
+  if (value === 'REGULAR') return 'Постоянный';
+  return 'Новый';
+}
+
+function segmentClass(value: Segment) {
+  if (value === 'VIP') return 'border-violet-200 bg-violet-50 text-violet-700';
+  if (value === 'REGULAR') return 'border-blue-200 bg-blue-50 text-blue-700';
+  return 'border-slate-200 bg-slate-50 text-slate-600';
+}
+
+function stateClass(value: ClientState) {
+  if (value === 'BLOCKED') return 'border-red-200 bg-red-50 text-red-700';
+  if (value === 'ACTIVE') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  return 'border-slate-200 bg-slate-50 text-slate-600';
+}
+
+function orderStatus(value: string | null) {
+  switch (String(value ?? '').toUpperCase()) {
+    case 'CREATED': return 'Создан';
+    case 'ACCEPTED': return 'Принят';
+    case 'COOKING': return 'Готовится';
+    case 'READY': return 'Готов';
+    case 'ON_THE_WAY': return 'В пути';
+    case 'DELIVERED': return 'Доставлен';
+    case 'REJECTED': return 'Отклонён';
+    case 'CANCELED': return 'Отменён';
+    case 'PAID': return 'Оплачен';
+    default: return 'Нет заказов';
+  }
+}
+
+function dateTime(value: string | null) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function money(value: number | null | undefined) {
+  return `${Math.round(Number(value ?? 0)).toLocaleString('ru-RU')} ₸`;
+}
+
+function friendlyError(error: unknown, fallback: string) {
+  if (error && typeof error === 'object') {
+    const status = (error as { status?: unknown }).status;
+    if (status === 401) return 'Сессия истекла. Войдите снова.';
+    if (status === 403) return 'У вас нет прав для этого действия.';
+    if (status === 404) return 'Клиенты не найдены.';
+    if (typeof status === 'number' && status >= 500) {
+      return 'Сервис временно недоступен. Повторите попытку позже.';
+    }
+  }
+  return fallback;
 }
 
 export default function UsersPage() {
   const router = useRouter();
+  const limit = 25;
 
-  const [q, setQ] = useState("");
-  const [segment, setSegment] = useState("");
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
+  const [segment, setSegment] = useState<'ALL' | Segment>('ALL');
+  const [state, setState] = useState<'ALL' | ClientState>('ALL');
   const [page, setPage] = useState(1);
-
-  const [items, setItems] = useState<Row[]>([]);
-  const [total, setTotal] = useState(0);
-
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const limit = 20;
-
-  const query = useMemo(() => {
-    const sp = new URLSearchParams();
-    if (q) sp.set("q", q);
-    if (segment) sp.set("segment", segment);
-    sp.set("page", String(page));
-    sp.set("limit", String(limit));
-    return sp.toString();
-  }, [q, segment, page]);
+  const [data, setData] = useState<ClientListResponse>(EMPTY);
+  const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    setErr(null);
+    const timer = window.setTimeout(() => {
+      setSearch(searchInput.trim());
+      setPage(1);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
 
-    apiFetch(`/users/customers?${query}`)
-      .then((data: any) => {
-        if (!alive) return;
+  const query = useMemo(() => {
+    const params = new URLSearchParams({
+      page: String(page),
+      limit: String(limit),
+      segment,
+      state,
+    });
+    if (search) params.set('q', search);
+    return params.toString();
+  }, [page, search, segment, state]);
 
-        const list = Array.isArray(data)
-          ? data
-          : Array.isArray(data?.items)
-          ? data.items
-          : Array.isArray(data?.data)
-          ? data.data
-          : [];
-
-        const totalValue =
-          Number(data?.meta?.total ?? data?.total ?? list.length) || 0;
-
-        setItems(list);
-        setTotal(totalValue);
-      })
-      .catch((e: any) => {
-        if (!alive) return;
-        setItems([]);
-        setTotal(0);
-        setErr(e?.message || "Ошибка загрузки пользователей");
-        console.error("UsersPage load error:", e);
-      })
-      .finally(() => {
-        if (alive) setLoading(false);
+  const load = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const result = await apiFetch<ClientListResponse>(`/admin/clients?${query}`);
+      setData({
+        items: Array.isArray(result?.items) ? result.items : [],
+        meta: result?.meta ?? EMPTY.meta,
+        summary: result?.summary ?? EMPTY.summary,
       });
-
-    return () => {
-      alive = false;
-    };
+    } catch (caught) {
+      setData(EMPTY);
+      setError(friendlyError(caught, 'Не удалось загрузить клиентов.'));
+    } finally {
+      setLoading(false);
+    }
   }, [query]);
 
-  const pages = Math.max(1, Math.ceil(total / limit));
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function exportCsv() {
+    try {
+      setExporting(true);
+      setError(null);
+      const params = new URLSearchParams({ segment, state });
+      if (search) params.set('q', search);
+      const response = await fetch(`/api/proxy/admin/clients/export?${params.toString()}`, {
+        method: 'GET',
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        if (response.status === 403) throw Object.assign(new Error(), { status: 403 });
+        throw Object.assign(new Error(), { status: response.status });
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `klienty-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (caught) {
+      setError(friendlyError(caught, 'Не удалось скачать список клиентов.'));
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  const reset = () => {
+    setSearchInput('');
+    setSearch('');
+    setSegment('ALL');
+    setState('ALL');
+    setPage(1);
+  };
+
+  const pages = Math.max(1, data.meta.pages || Math.ceil(data.meta.total / limit));
 
   return (
-    <div className="p-6 bg-[#f5f7fb] min-h-screen">
-      <div className="max-w-none">
-        <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+    <main className="min-h-screen bg-[#f7f7f8] px-5 py-6 text-slate-950 sm:px-6 lg:px-8">
+      <div className="w-full">
+        <header className="mb-5 flex flex-wrap items-end justify-between gap-4">
           <div>
-            <h1 className="text-4xl font-bold tracking-tight text-slate-900">
-              Пользователи
-            </h1>
-            <p className="mt-2 text-sm text-slate-500">
-              Клиенты сервиса, история активности и сегментация
+            <h1 className="text-[28px] font-black tracking-[-0.03em]">Клиенты</h1>
+            <p className="mt-1 text-[13px] font-medium text-slate-500">
+              {data.meta.total.toLocaleString('ru-RU')} в списке с учётом фильтров
             </p>
           </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-              <div className="text-xs font-medium text-slate-500">Всего клиентов</div>
-              <div className="text-2xl font-bold text-slate-900">{total}</div>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm mb-6">
-          <div className="mb-5 flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-2xl font-bold text-slate-900">Фильтр и поиск</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Поиск по телефону и имени, фильтр по сегменту
-              </p>
-            </div>
-
+          <div className="flex items-center gap-2">
             <button
-              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-              onClick={() => {
-                setQ("");
-                setSegment("");
-                setPage(1);
-              }}
+              type="button"
+              onClick={() => void exportCsv()}
+              disabled={exporting}
+              className="inline-flex h-10 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 text-[13px] font-bold text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-50"
             >
-              Сброс
+              <Download className="h-4 w-4" /> {exporting ? 'Подготовка' : 'Экспорт'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-[13px] font-bold text-slate-700 transition hover:bg-slate-50"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Обновить
             </button>
           </div>
+        </header>
 
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_260px_180px]">
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-slate-700">
-                Поиск
-              </label>
+        <section className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div className="rounded-lg border border-slate-200 bg-white px-4 py-4">
+            <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-[0.06em] text-slate-400">
+              Всего <UsersRound className="h-4 w-4 text-slate-500" />
+            </div>
+            <div className="mt-2 text-[24px] font-black">{data.summary.total}</div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white px-4 py-4">
+            <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-[0.06em] text-slate-400">
+              Активные <UserRound className="h-4 w-4 text-emerald-600" />
+            </div>
+            <div className="mt-2 text-[24px] font-black">{data.summary.active}</div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white px-4 py-4">
+            <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-[0.06em] text-slate-400">
+              VIP <span className="text-[13px] text-violet-600">VIP</span>
+            </div>
+            <div className="mt-2 text-[24px] font-black">{data.summary.segments.VIP}</div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white px-4 py-4">
+            <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-[0.06em] text-slate-400">
+              Заблокированы <ShieldBan className="h-4 w-4 text-red-600" />
+            </div>
+            <div className="mt-2 text-[24px] font-black">{data.summary.blocked}</div>
+          </div>
+        </section>
+
+        <section className="mb-4 rounded-lg border border-slate-200 bg-white p-3">
+          <div className="flex flex-wrap gap-2">
+            <div className="relative min-w-[260px] flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:bg-white"
-                placeholder="Поиск: телефон / имя"
-                value={q}
-                onChange={(e) => {
-                  setQ(e.target.value);
-                  setPage(1);
-                }}
+                value={searchInput}
+                onChange={(event) => setSearchInput(event.target.value)}
+                placeholder="Поиск по имени, телефону или почте"
+                className="h-10 w-full rounded-lg border border-slate-200 bg-white pl-10 pr-3 text-[13px] font-semibold outline-none focus:border-slate-400"
               />
             </div>
-
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-slate-700">
-                Сегмент
-              </label>
-              <select
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:bg-white"
-                value={segment}
-                onChange={(e) => {
-                  setSegment(e.target.value);
-                  setPage(1);
-                }}
+            <select
+              value={segment}
+              onChange={(event) => {
+                setSegment(event.target.value as 'ALL' | Segment);
+                setPage(1);
+              }}
+              className="h-10 min-w-[160px] rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-bold text-slate-700 outline-none"
+            >
+              <option value="ALL">Любой сегмент</option>
+              <option value="NEW">Новые</option>
+              <option value="REGULAR">Постоянные</option>
+              <option value="VIP">VIP</option>
+            </select>
+            <select
+              value={state}
+              onChange={(event) => {
+                setState(event.target.value as 'ALL' | ClientState);
+                setPage(1);
+              }}
+              className="h-10 min-w-[170px] rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-bold text-slate-700 outline-none"
+            >
+              <option value="ALL">Любое состояние</option>
+              <option value="ACTIVE">Активные</option>
+              <option value="BLOCKED">Заблокированные</option>
+              <option value="INACTIVE">Неактивные</option>
+            </select>
+            {(searchInput || segment !== 'ALL' || state !== 'ALL') && (
+              <button
+                type="button"
+                onClick={reset}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-bold text-slate-600 hover:bg-slate-50"
               >
-                <option value="">Все</option>
-                <option value="NEW">Первичный</option>
-                <option value="REGULAR">Постоянный</option>
-                <option value="VIP">VIP</option>
-              </select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 xl:grid-cols-1">
-              <div className="rounded-2xl bg-slate-50 p-4">
-                <div className="text-xs font-medium text-slate-500">Найдено</div>
-                <div className="mt-1 text-3xl font-bold text-slate-900">
-                  {items.length}
-                </div>
-              </div>
-            </div>
+                <X className="h-4 w-4" /> Сбросить
+              </button>
+            )}
           </div>
+        </section>
 
-          {loading && (
-            <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
-              Загрузка пользователей...
-            </div>
-          )}
-
-          {err && (
-            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-              Ошибка загрузки пользователей
-            </div>
-          )}
-        </div>
-
-        <div className="rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          <div className="border-b border-slate-200 px-6 py-5">
-            <h2 className="text-2xl font-bold text-slate-900">Список клиентов</h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Нажми на строку, чтобы открыть карточку клиента
-            </p>
+        {error && (
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-[13px] font-semibold text-red-700">
+            {error}
           </div>
+        )}
 
+        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
           <div className="overflow-x-auto">
-            <table className="min-w-full">
+            <table className="min-w-[1120px] w-full table-fixed">
               <thead>
-                <tr className="border-b border-slate-200 bg-slate-50/80">
-                  <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                    Телефон
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                    Имя
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                    Заказов
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                    Последний заказ
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                    Статус
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                    Сумма
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                    Сегмент
-                  </th>
+                <tr className="border-b border-slate-200 bg-slate-50 text-left text-[10px] font-black uppercase tracking-[0.07em] text-slate-400">
+                  <th className="w-[22%] px-4 py-3">Клиент</th>
+                  <th className="w-[13%] px-4 py-3">Состояние</th>
+                  <th className="w-[15%] px-4 py-3">Контакты</th>
+                  <th className="w-[12%] px-4 py-3">Сегмент</th>
+                  <th className="w-[11%] px-4 py-3 text-right">Заказы</th>
+                  <th className="w-[13%] px-4 py-3 text-right">Потрачено</th>
+                  <th className="w-[12%] px-4 py-3">Последний заказ</th>
+                  <th className="w-[36px] px-2 py-3" />
                 </tr>
               </thead>
-
               <tbody>
-                {items.map((x) => {
-                  const statusUi = getStatusUi(x.lastOrderStatus);
-
-                  return (
-                    <tr
-                      key={x.id}
-                      className="cursor-pointer border-b border-slate-100 transition hover:bg-slate-50"
-                      onClick={() => router.push(`/layout-20/users/${x.id}`)}
-                    >
-                      <td className="px-6 py-5 align-top">
-                        <div className="text-sm font-bold text-slate-900">{x.phone}</div>
-                      </td>
-
-                      <td className="px-6 py-5 align-top">
-                        <div className="text-sm font-semibold text-slate-800">
-                          {x.name || "-"}
-                        </div>
-                      </td>
-
-                      <td className="px-6 py-5 align-top">
-                        <div className="inline-flex min-w-[44px] items-center justify-center rounded-xl bg-slate-100 px-3 py-2 text-sm font-bold text-slate-700">
-                          {x.ordersCount}
-                        </div>
-                      </td>
-
-                      <td className="px-6 py-5 align-top">
-                        <div className="text-sm font-semibold text-slate-800">
-                          {formatDate(x.lastOrderAt)}
-                        </div>
-                      </td>
-
-                      <td className="px-6 py-5 align-top">
-                        <span
-                          className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold ${statusUi.cls}`}
-                        >
-                          <span className={`h-2 w-2 rounded-full ${statusUi.dot}`} />
-                          {statusUi.label}
-                        </span>
-                      </td>
-
-                      <td className="px-6 py-5 align-top">
-                        <div className="text-sm font-bold text-slate-900">
-                          {formatMoney(x.lastOrderTotal)}
-                        </div>
-                      </td>
-
-                      <td className="px-6 py-5 align-top">
-                        <span
-                          className={`inline-flex rounded-full border px-3 py-2 text-xs font-semibold ${segmentClass(
-                            x.segment
-                          )}`}
-                        >
-                          {segmentLabel(x.segment)}
-                        </span>
-                      </td>
+                {loading && data.items.length === 0 ? (
+                  Array.from({ length: 4 }).map((_, index) => (
+                    <tr key={index} className="border-b border-slate-100">
+                      <td colSpan={8} className="h-[70px] animate-pulse bg-slate-50/60" />
                     </tr>
-                  );
-                })}
-
-                {!loading && items.length === 0 && (
+                  ))
+                ) : data.items.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-16 text-center">
-                      <div className="text-5xl mb-3">👤</div>
-                      <div className="text-xl font-bold text-slate-900 mb-2">
-                        Ничего не найдено
-                      </div>
-                      <div className="text-sm text-slate-500">
-                        Попробуй изменить поиск или фильтр сегмента
+                    <td colSpan={8} className="px-4 py-14 text-center">
+                      <div className="text-[15px] font-black">Клиенты не найдены</div>
+                      <div className="mt-1 text-[12px] font-medium text-slate-400">
+                        Измените поиск или фильтры.
                       </div>
                     </td>
                   </tr>
+                ) : (
+                  data.items.map((client) => (
+                    <tr
+                      key={client.id}
+                      onClick={() => router.push(`/layout-20/users/${client.id}`)}
+                      className="cursor-pointer border-b border-slate-100 text-[12px] transition hover:bg-slate-50 last:border-b-0"
+                    >
+                      <td className="px-4 py-3.5">
+                        <div className="font-black text-slate-950">{client.name || 'Без имени'}</div>
+                        <div className="mt-1 text-[11px] font-medium text-slate-400">
+                          Зарегистрирован {dateTime(client.createdAt)}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <span className={`inline-flex rounded-md border px-2 py-1 text-[11px] font-bold ${stateClass(client.state)}`}>
+                          {client.stateLabel}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <div className="font-bold text-slate-800">{client.phone}</div>
+                        <div className="mt-1 truncate text-[11px] font-medium text-slate-400">
+                          {client.email || 'Почта не указана'}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <span className={`inline-flex rounded-md border px-2 py-1 text-[11px] font-bold ${segmentClass(client.segment)}`}>
+                          {segmentLabel(client.segment)}
+                        </span>
+                        <div className="mt-1 text-[10px] font-medium text-slate-400">
+                          по доставленным заказам
+                        </div>
+                      </td>
+                      <td className="px-4 py-3.5 text-right">
+                        <div className="font-black text-slate-950">{client.totalOrders}</div>
+                        <div className="mt-1 text-[10px] font-medium text-slate-400">
+                          доставлено {client.deliveredCount}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3.5 text-right font-black text-slate-950">
+                        {money(client.totalSpent)}
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <div className="font-bold text-slate-700">{orderStatus(client.lastOrderStatus)}</div>
+                        <div className="mt-1 text-[10px] font-medium text-slate-400">
+                          {client.lastOrderNumber ? `№${client.lastOrderNumber} · ` : ''}{dateTime(client.lastOrderAt)}
+                        </div>
+                      </td>
+                      <td className="px-2 py-3.5 text-right text-slate-400">
+                        <ChevronRight className="h-4 w-4" />
+                      </td>
+                    </tr>
+                  ))
                 )}
               </tbody>
             </table>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-200 px-6 py-4 bg-slate-50/60">
-            <div className="text-sm text-slate-500">
-              Страница {page} из {pages}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3">
+            <div className="text-[12px] font-medium text-slate-500">
+              Страница {page} из {pages} · {data.meta.total.toLocaleString('ru-RU')} клиентов
             </div>
-
-            <div className="flex items-center gap-2">
+            <div className="flex gap-2">
               <button
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={page <= 1}
-                onClick={() => setPage((p) => p - 1)}
+                type="button"
+                disabled={page <= 1 || loading}
+                onClick={() => setPage((value) => Math.max(1, value - 1))}
+                className="h-9 rounded-lg border border-slate-200 bg-white px-4 text-[12px] font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Назад
               </button>
-
               <button
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={page >= pages}
-                onClick={() => setPage((p) => p + 1)}
+                type="button"
+                disabled={page >= pages || loading}
+                onClick={() => setPage((value) => value + 1)}
+                className="h-9 rounded-lg border border-slate-200 bg-white px-4 text-[12px] font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Вперёд
               </button>
             </div>
           </div>
-        </div>
+        </section>
       </div>
-    </div>
+    </main>
   );
 }
