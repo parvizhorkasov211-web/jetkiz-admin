@@ -24,6 +24,11 @@ export type RestaurantAnalyticsProductSort =
   | "cart"
   | "conversion";
 
+export type RestaurantAnalyticsQuality = {
+  orderEventCoveragePct: number;
+  orderFunnelTrusted: boolean;
+};
+
 export type RestaurantAnalyticsOverview = {
   range: RestaurantAnalyticsRange | string;
   period?: {
@@ -48,12 +53,15 @@ export type RestaurantAnalyticsOverview = {
   productViews: number;
   addToCartEvents: number;
   checkoutStarts: number;
+  orderCreatedEvents: number;
+
+  analyticsQuality: RestaurantAnalyticsQuality;
 
   conversion: {
     viewToCart: number;
     cartToCheckout: number;
-    checkoutToOrder: number;
-    restaurantViewToOrder: number;
+    checkoutToOrder: number | null;
+    restaurantViewToOrder: number | null;
   };
 
   quality: {
@@ -87,8 +95,10 @@ export type RestaurantAnalyticsTopRestaurant = {
   productViews: number;
   addToCart: number;
   orderCreatedEvents: number;
+  orderEventCoveragePct: number;
+  conversionTrusted: boolean;
 
-  conversionRate: number;
+  conversionRate: number | null;
 
   readyCount: number;
   readyOnTimeCount: number;
@@ -107,6 +117,7 @@ export type RestaurantAnalyticsTopProduct = {
   imageUrl: string | null;
 
   price: number;
+  isAvailable: boolean;
 
   orderedQuantity: number;
   ordersCount: number;
@@ -118,7 +129,8 @@ export type RestaurantAnalyticsTopProduct = {
   removeFromCart: number;
 
   viewToCartRate: number;
-  cartToOrderRate: number;
+  /** Not available until server-side product order attribution is implemented. */
+  cartToOrderRate: null;
 };
 
 export type RestaurantAnalyticsTopRestaurantsResponse = {
