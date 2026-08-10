@@ -24,9 +24,25 @@ async function getParams(context: RouteContext) {
   return await context.params;
 }
 
+function routeBackendPath(request: NextRequest, path: string[]) {
+  const joined = path.join('/');
+  const isRestaurantList = joined === 'restaurants';
+  const isPaginatedAdminList =
+    request.method.toUpperCase() === 'GET' &&
+    request.nextUrl.searchParams.has('page') &&
+    request.nextUrl.searchParams.has('limit');
+
+  if (isRestaurantList && isPaginatedAdminList) {
+    return ['admin', 'restaurants'];
+  }
+
+  return path;
+}
+
 function buildTargetUrl(request: NextRequest, path: string[] = []) {
   const base = normalizeBaseUrl(BACKEND_URL);
-  const safePath = path
+  const routedPath = routeBackendPath(request, path);
+  const safePath = routedPath
     .map((p) => encodeURIComponent(decodeURIComponent(String(p))))
     .join('/');
 
