@@ -52,6 +52,13 @@ function getErrorMessage(data: unknown, status: number): string {
       rawMessage = message;
     }
 
+    if (!rawMessage && message && typeof message === "object") {
+      const nestedMessage = (message as Record<string, unknown>).message;
+      if (typeof nestedMessage === "string" && nestedMessage.trim()) {
+        rawMessage = nestedMessage;
+      }
+    }
+
     const error = record.error;
     if (!rawMessage && typeof error === "string" && error.trim()) {
       rawMessage = error;
@@ -68,6 +75,17 @@ function getErrorMessage(data: unknown, status: number): string {
   }
 
   const normalized = rawMessage.trim().toLowerCase();
+  const exactRu: Record<string, string> = {
+    "database request failed":
+      "Не удалось получить данные из базы. Проверьте миграции backend.",
+    forbidden: "Недостаточно прав для выполнения этого действия.",
+    unauthorized: "Сессия истекла. Войдите в админку заново.",
+    "order not found": "Заказ не найден.",
+    "courier not found": "Курьер не найден.",
+    "courier is not assigned": "Курьер ещё не назначен.",
+  };
+
+  if (exactRu[normalized]) return exactRu[normalized];
   const exact: Record<string, string> = {
     "database request failed": "Не удалось получить данные из базы. Проверьте миграции backend.",
     forbidden: "Недостаточно прав для выполнения этого действия.",
@@ -78,6 +96,17 @@ function getErrorMessage(data: unknown, status: number): string {
   };
 
   if (exact[normalized]) return exact[normalized];
+  if (rawMessage) return rawMessage;
+  if (status === 400) return "Backend отклонил запрос. Проверьте введённые данные.";
+  if (status === 401) return "Сессия истекла. Войдите в админку заново.";
+  if (status === 403) return "Недостаточно прав для выполнения этого действия.";
+  if (status === 404) return "Запрошенные данные не найдены.";
+  if (status === 409) {
+    return "Действие конфликтует с текущим состоянием данных. Обновите страницу.";
+  }
+  if (status >= 500) {
+    return "Ошибка backend. Повторите попытку или проверьте журнал сервера.";
+  }
   if (status === 400) return "Backend отклонил запрос. Проверьте введённые данные.";
   if (status === 401) return "Сессия истекла. Войдите в админку заново.";
   if (status === 403) return "Недостаточно прав для выполнения этого действия.";

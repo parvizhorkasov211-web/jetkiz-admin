@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 
 import { apiFetch } from "@/lib/api";
+import { CourierDetailsV2Page } from "@/components/couriers/CourierDetailsV2Page";
 import { CourierFinancePanel } from "@/components/ui/widgets/CourierFinancePanel";
 import {
   CourierOnTimeRateMetric,
@@ -12,6 +13,7 @@ import {
 
 type ActiveOrder = {
   id: string;
+  number?: number | null;
   status: string;
   total: number;
   createdAt: string;
@@ -83,6 +85,33 @@ function fmtDate(value: unknown): string {
   } catch {
     return String(value ?? "");
   }
+}
+
+function getActiveOrderLabelsFromError(error: unknown): string[] {
+  const payload = (error as { payload?: unknown })?.payload;
+  const payloadRecord =
+    payload && typeof payload === "object"
+      ? (payload as Record<string, unknown>)
+      : {};
+  const nestedMessage =
+    payloadRecord.message && typeof payloadRecord.message === "object"
+      ? (payloadRecord.message as Record<string, unknown>)
+      : {};
+  const activeOrders = Array.isArray(payloadRecord.activeOrders)
+    ? payloadRecord.activeOrders
+    : Array.isArray(nestedMessage.activeOrders)
+      ? nestedMessage.activeOrders
+      : [];
+
+  return activeOrders
+    .map((order) => {
+      const record =
+        order && typeof order === "object"
+          ? (order as Record<string, unknown>)
+          : {};
+      return record.number ? `#${record.number}` : String(record.id ?? "").slice(0, 8);
+    })
+    .filter(Boolean);
 }
 
 function resolveAvatarSrc(avatarUrl?: string | null): string {
@@ -208,6 +237,10 @@ function StatCard({
 }
 
 export default function CourierDetailsPage() {
+  return <CourierDetailsV2Page />;
+}
+
+function LegacyCourierDetailsPage() {
   const params = useParams();
   const router = useRouter();
 
@@ -254,6 +287,8 @@ export default function CourierDetailsPage() {
 
   const [blockReason, setBlockReason] = useState("");
   const [orderIdToAssign, setOrderIdToAssign] = useState("");
+  const [temporaryPassword, setTemporaryPassword] = useState<string | null>(null);
+  const [temporaryPasswordExpiresAt, setTemporaryPasswordExpiresAt] = useState<string | null>(null);
 
   const buildCompletedQuery = (courierUserId: string) => {
     const id = String(courierUserId || "").trim();
@@ -590,6 +625,38 @@ export default function CourierDetailsPage() {
     }
   };
 
+  const resetPassword = async () => {
+    if (!courierId) {
+      return;
+    }
+
+    try {
+      setActionLoading(true);
+      setError(null);
+      setInfo(null);
+      setTemporaryPassword(null);
+      setTemporaryPasswordExpiresAt(null);
+
+      const response = (await apiFetch(`/couriers/${courierId}/reset-password`, {
+        method: "POST",
+      })) as {
+        temporaryPassword?: string | null;
+        temporaryPasswordExpiresAt?: string | null;
+      };
+
+      setTemporaryPassword(response.temporaryPassword ?? null);
+      setTemporaryPasswordExpiresAt(response.temporaryPasswordExpiresAt ?? null);
+      setInfo("Временный пароль выдан. Покажите его курьеру сейчас.");
+      await load();
+    } catch (actionError) {
+      const message =
+        actionError instanceof Error ? actionError.message : "Ошибка сброса пароля";
+      setError(message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const assignOrder = async () => {
     if (!courierId) {
       return;
@@ -762,6 +829,25 @@ export default function CourierDetailsPage() {
         {info ? (
           <div className="mb-6 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-700">
             {info}
+          </div>
+        ) : null}
+
+        {temporaryPassword ? (
+          <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900">
+            <div className="font-bold">Временный пароль показан один раз</div>
+            <div className="mt-2 rounded-xl border border-amber-300 bg-white px-3 py-2 font-mono text-slate-950">
+              {temporaryPassword}
+            </div>
+            <div className="mt-2 text-amber-800">
+              Срок действия: {fmtDate(temporaryPasswordExpiresAt)}
+            </div>
+            <button
+              type="button"
+              className="mt-3 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+              onClick={() => void navigator.clipboard.writeText(temporaryPassword)}
+            >
+              Скопировать
+            </button>
           </div>
         ) : null}
 
@@ -1123,14 +1209,23 @@ export default function CourierDetailsPage() {
                     </button>
                   ) : (
                     <button
-                      className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 disabled:opacity-50"
-                      onClick={() => void toggleOnline(true)}
-                      disabled={actionLoading || blocked}
+                      className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-600 disabled:opacity-50"
+                      onClick={() => undefined}
+                      disabled
                       type="button"
                     >
                       Включить онлайн
                     </button>
                   )}
+
+                  <button
+                    className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 disabled:opacity-50"
+                    onClick={() => void resetPassword()}
+                    disabled={actionLoading}
+                    type="button"
+                  >
+                    Сбросить пароль
+                  </button>
                 </div>
               </div>
             </div>
@@ -1153,7 +1248,7 @@ export default function CourierDetailsPage() {
                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none md:w-80"
                 value={orderIdToAssign}
                 onChange={(event) => setOrderIdToAssign(event.target.value)}
-                placeholder="orderId"
+                placeholder="Номер заказа"
               />
               <button
                 className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
@@ -1182,7 +1277,7 @@ export default function CourierDetailsPage() {
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50/80">
                     <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                      ID
+                      №
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
                       Статус
@@ -1216,7 +1311,7 @@ export default function CourierDetailsPage() {
                       >
                         <td className="px-6 py-5 align-top">
                           <div className="break-all text-sm font-semibold text-slate-800">
-                            {order.id}
+                            {order.number ? `#${order.number}` : order.id.slice(0, 8)}
                           </div>
                         </td>
                         <td className="px-6 py-5 align-top">

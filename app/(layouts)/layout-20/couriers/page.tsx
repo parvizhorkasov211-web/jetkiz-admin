@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, API_URL } from "@/lib/api";
+import { CouriersProductionV2Page } from "@/components/couriers/CouriersProductionV2Page";
 
 const ReactApexChart = dynamic(() => import("react-apexcharts"), { ssr: false });
 
@@ -239,6 +240,10 @@ function StatCard({
 }
 
 export default function CouriersPage() {
+  return <CouriersProductionV2Page />;
+}
+
+function LegacyCouriersPage() {
   const router = useRouter();
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -1529,4 +1534,4 @@ export default function CouriersPage() {
       ) : null}
     </div>
   );
-}  
+}

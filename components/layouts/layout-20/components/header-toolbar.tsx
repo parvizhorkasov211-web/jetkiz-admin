@@ -2,10 +2,12 @@
 
 import { ClipboardList, Plus } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import * as XLSX from "xlsx";
 
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/api";
+import { getSession } from "@/lib/auth";
 import { useLayout } from "./context";
 
 type ApiCollectionResponse<T> =
@@ -17,12 +19,18 @@ type ApiCollectionResponse<T> =
 
 type ExportCourier = {
   id?: string;
+  number?: number | null;
   name?: string | null;
+  fullName?: string | null;
   firstName?: string | null;
   lastName?: string | null;
   phone?: string | null;
   iin?: string | null;
+  addressText?: string | null;
   status?: string | null;
+  activeOrdersCount?: number | null;
+  personalFeeOverride?: number | null;
+  payoutBonusAdd?: number | null;
   courierCommissionPctOverride?: number | null;
   user?: {
     phone?: string | null;
@@ -42,6 +50,31 @@ type ExportRestaurant = {
   commissionPct?: number | null;
 };
 
+type AdminLike = {
+  roleCodes?: string[];
+  roles?: string[];
+  permissionCodes?: string[];
+  permissions?: string[];
+} | null;
+
+function list(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+}
+
+function hasPermission(admin: AdminLike, permission: string): boolean {
+  const roles = [...list(admin?.roleCodes), ...list(admin?.roles)];
+  const permissions = [
+    ...list(admin?.permissionCodes),
+    ...list(admin?.permissions),
+  ];
+
+  return (
+    roles.includes("SUPER_ADMIN") ||
+    permissions.includes("admin.full_access") ||
+    permissions.includes(permission)
+  );
+}
+
 function normalizeCollection<T>(data: ApiCollectionResponse<T>): T[] {
   if (Array.isArray(data)) {
     return data;
@@ -59,6 +92,12 @@ function normalizeCollection<T>(data: ApiCollectionResponse<T>): T[] {
 }
 
 function buildCourierName(courier: ExportCourier): string {
+  const fullName = String(courier.fullName ?? "").trim();
+
+  if (fullName) {
+    return fullName;
+  }
+
   const directName = String(courier.name ?? "").trim();
 
   if (directName) {
@@ -75,12 +114,22 @@ export function HeaderToolbar() {
   const { isMobile } = useLayout();
   const router = useRouter();
   const pathname = usePathname();
+  const [admin, setAdmin] = useState<AdminLike>(null);
 
   const isCouriersPage = pathname === "/layout-20/couriers";
   const isCouriersNewPage = pathname === "/layout-20/couriers/new";
 
   const isRestaurantsPage = pathname === "/layout-20/restaurants";
   const isRestaurantsNewPage = pathname === "/layout-20/restaurants/new";
+
+  useEffect(() => {
+    void getSession().then((session) => setAdmin(session.admin));
+  }, []);
+
+  const canCreateCourier =
+    hasPermission(admin, "couriers.update") &&
+    hasPermission(admin, "couriers.sensitive_read");
+  const canExportCouriers = hasPermission(admin, "couriers.export");
 
   const handleAddClick = () => {
     if (isCouriersPage) {
@@ -94,14 +143,16 @@ export function HeaderToolbar() {
   };
 
   const exportCouriers = async () => {
-    const data = (await apiFetch("/couriers")) as ApiCollectionResponse<ExportCourier>;
+    if (!canExportCouriers) return;
+
+    const data = (await apiFetch("/couriers/export")) as ApiCollectionResponse<ExportCourier>;
     const couriers = normalizeCollection(data);
 
     const rows = couriers.map((courier) => ({
-      ID: courier.id ?? "",
+      "Номер курьера": courier.number ?? "",
       "Имя/Фамилия": buildCourierName(courier),
       Телефон: courier.phone ?? courier.user?.phone ?? "",
-      ИНН: courier.iin ?? "",
+      ИИН: courier.iin ?? "",
       Статус: courier.status ?? "",
       "Комиссия override (%)":
         courier.courierCommissionPctOverride ??
@@ -153,7 +204,7 @@ export function HeaderToolbar() {
   };
 
   const showAddButton =
-    (isCouriersPage && !isCouriersNewPage) ||
+    (isCouriersPage && !isCouriersNewPage && canCreateCourier) ||
     (isRestaurantsPage && !isRestaurantsNewPage);
 
   const addButtonLabel = isCouriersPage
@@ -162,7 +213,8 @@ export function HeaderToolbar() {
       ? "Добавить ресторан"
       : null;
 
-  const showExportButton = isCouriersPage || isRestaurantsPage;
+  const showExportButton =
+    (isCouriersPage && canExportCouriers) || isRestaurantsPage;
 
   return (
     <nav className="flex items-center gap-2.5">

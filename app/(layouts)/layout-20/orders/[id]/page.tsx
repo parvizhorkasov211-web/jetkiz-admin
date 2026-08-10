@@ -668,7 +668,7 @@ export default function OrderDetailsPage() {
             </div>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="mb-4 flex items-center justify-between"><h2 className="font-bold text-slate-950">Расчёт заказа</h2><span className="text-xs text-slate-500">Суммы зафиксированы backend для этого заказа</span></div>
+              <div className="mb-4 flex items-center justify-between"><h2 className="font-bold text-slate-950">Расчёт заказа</h2><span className="text-xs text-slate-500">Суммы зафиксированы  для этого заказа</span></div>
               <div className={`grid gap-3 ${canReadFinance ? "lg:grid-cols-3" : ""}`}>
                 <FinanceGroup title="Платит клиент" rows={[
                   ["Товары", formatMoney(order.subtotal)],
@@ -684,7 +684,7 @@ export default function OrderDetailsPage() {
                   ["Начислено за доставку", formatMoney(order.courierFeeGross ?? 0)],
                   [`Удержание JETKIZ${order.courierCommissionPctApplied != null ? ` — ${order.courierCommissionPctApplied}%` : ""}`, `− ${formatMoney(order.courierCommissionAmount ?? 0)}`],
                   ["Дополнительный бонус", `+ ${formatMoney(order.courierBonusApplied ?? 0)}`],
-                ]} totalLabel="К выплате курьеру" total={formatMoney(order.courierFee ?? 0)} /> : <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4"><div className="font-semibold text-slate-950">Получает курьер</div><div className="mt-3 text-sm leading-5 text-slate-600">Курьер не назначен. Тариф, комиссия и итоговая выплата будут зафиксированы backend после назначения.</div></div> : null}
+                ]} totalLabel="К выплате курьеру" total={formatMoney(order.courierFee ?? 0)} /> : <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4"><div className="font-semibold text-slate-950">Получает курьер</div><div className="mt-3 text-sm leading-5 text-slate-600">Курьер не назначен. Тариф, комиссия и итоговая выплата будут зафиксированы  после назначения.</div></div> : null}
               </div>
             </section>
           </main>
