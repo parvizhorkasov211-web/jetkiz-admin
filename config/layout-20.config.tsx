@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   FileCheck,
   Home,
+  LayoutDashboard,
   MapPin,
   MessageSquare,
   Search,
@@ -24,9 +25,9 @@ export const MENU_SIDEBAR_MAIN: MenuConfig = [
   {
     children: [
       {
-        title: "Главная приложения",
+        title: "Обзор",
         path: `${L20}`,
-        icon: Home,
+        icon: LayoutDashboard,
       },
     ],
   },
@@ -56,6 +57,7 @@ export const MENU_SIDEBAR_MAIN: MenuConfig = [
   {
     title: "Контент",
     children: [
+      { title: "Главная приложения", path: `${L20}/content/home`, icon: Home },
       { title: "Промокоды", path: `${L20}/promocodes`, icon: Tag },
       { title: "Отзывы", path: `${L20}/reviews`, icon: MessageSquare },
       { title: "Уведомления", path: `${L20}/notifications`, icon: Bell },
