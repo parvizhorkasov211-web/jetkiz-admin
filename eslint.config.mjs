@@ -9,17 +9,22 @@ const nextVitalsWithLegacyUiWarnings = nextVitals.map((config) => {
     return config;
   }
 
+  const rules = Object.fromEntries(
+    Object.entries(config.rules ?? {}).map(([ruleName, severity]) => {
+      if (
+        ruleName.startsWith('react-hooks/') &&
+        ruleName !== 'react-hooks/rules-of-hooks'
+      ) {
+        return [ruleName, 'warn'];
+      }
+
+      return [ruleName, severity];
+    }),
+  );
+
   return {
     ...config,
-    rules: {
-      ...config.rules,
-      // Next 16 / React 19 enables additional React Hooks correctness rules.
-      // Legacy UI-kit components predate these rules. Keep findings visible,
-      // but do not make them release blockers while production build is green.
-      'react-hooks/set-state-in-effect': 'warn',
-      'react-hooks/purity': 'warn',
-      'react-hooks/refs': 'warn',
-    },
+    rules,
   };
 });
 
