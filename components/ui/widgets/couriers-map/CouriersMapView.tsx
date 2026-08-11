@@ -1,10 +1,13 @@
 'use client';
 
+import 'leaflet/dist/leaflet.css';
+
 import L from 'leaflet';
-import { RefreshCw, Search } from 'lucide-react';
+import { MapPinOff, RefreshCw, Search } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
 
+import { apiFetch } from '@/lib/api';
 import type {
   CourierMapFilter,
   CourierMapPoint,
@@ -14,6 +17,7 @@ import type {
 const DEFAULT_CENTER: [number, number] = [52.9356, 70.1886];
 const DEFAULT_ZOOM = 13;
 const REFRESH_INTERVAL_MS = 15_000;
+const STALE_LOCATION_MS = 2 * 60 * 1000;
 
 const FILTERS: Array<{ value: CourierMapFilter; label: string }> = [
   { value: 'ALL', label: 'Все' },
@@ -39,7 +43,7 @@ const STATUS_META: Record<
     badgeClassName: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200',
   },
   BUSY: {
-    label: 'Занят',
+    label: 'Занят заказом',
     markerColor: '#f59e0b',
     markerBorder: '#b45309',
     badgeClassName: 'bg-amber-50 text-amber-700 ring-1 ring-amber-200',
@@ -58,27 +62,44 @@ const STATUS_META: Record<
   },
 };
 
+const ORDER_STATUS_LABELS: Record<string, string> = {
+  CREATED: 'Создан',
+  ACCEPTED: 'Принят рестораном',
+  COOKING: 'Готовится',
+  READY: 'Готов',
+  ON_THE_WAY: 'В пути',
+  DELIVERED: 'Доставлен',
+  CANCELED: 'Отменён',
+  CANCELLED: 'Отменён',
+  REJECTED: 'Отклонён',
+};
+
 function isValidPoint(point: CourierMapPoint): point is CourierMapPoint & {
   lat: number;
   lng: number;
 } {
   return (
+    point.hasLocation !== false &&
     typeof point.lat === 'number' &&
     Number.isFinite(point.lat) &&
+    point.lat >= -90 &&
+    point.lat <= 90 &&
     typeof point.lng === 'number' &&
-    Number.isFinite(point.lng)
+    Number.isFinite(point.lng) &&
+    point.lng >= -180 &&
+    point.lng <= 180
   );
 }
 
-function createCourierIcon(status: CourierMapStatus): L.DivIcon {
+function createCourierIcon(status: CourierMapStatus, stale: boolean): L.DivIcon {
   const meta = STATUS_META[status];
 
   return L.divIcon({
     className: 'jetkiz-courier-marker',
     html: `
       <div style="
-        width: 28px;
-        height: 28px;
+        width: 30px;
+        height: 30px;
         border-radius: 9999px;
         background: ${meta.markerColor};
         border: 3px solid ${meta.markerBorder};
@@ -86,6 +107,7 @@ function createCourierIcon(status: CourierMapStatus): L.DivIcon {
         display: flex;
         align-items: center;
         justify-content: center;
+        opacity: ${stale ? '0.55' : '1'};
       ">
         <div style="
           width: 8px;
@@ -96,67 +118,73 @@ function createCourierIcon(status: CourierMapStatus): L.DivIcon {
         "></div>
       </div>
     `,
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
-    popupAnchor: [0, -14],
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+    popupAnchor: [0, -15],
   });
 }
 
 function formatRelativeTime(value: string | null): string {
-  if (!value) {
-    return 'нет данных';
-  }
+  if (!value) return 'нет данных';
 
-  const date = new Date(value);
-  const timestamp = date.getTime();
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return 'нет данных';
 
-  if (!Number.isFinite(timestamp)) {
-    return 'нет данных';
-  }
-
-  const diffMs = Date.now() - timestamp;
-  const diffSeconds = Math.max(0, Math.floor(diffMs / 1000));
+  const diffSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
   const diffMinutes = Math.floor(diffSeconds / 60);
   const diffHours = Math.floor(diffMinutes / 60);
   const diffDays = Math.floor(diffHours / 24);
 
-  if (diffSeconds < 60) {
-    return 'только что';
-  }
-
-  if (diffMinutes < 60) {
-    return `${diffMinutes} мин назад`;
-  }
-
-  if (diffHours < 24) {
-    return `${diffHours} ч назад`;
-  }
-
+  if (diffSeconds < 60) return 'только что';
+  if (diffMinutes < 60) return `${diffMinutes} мин назад`;
+  if (diffHours < 24) return `${diffHours} ч назад`;
   return `${diffDays} д назад`;
 }
 
-function FitMapOnce({ points }: { points: Array<CourierMapPoint & { lat: number; lng: number }> }) {
+function isLocationStale(point: CourierMapPoint): boolean {
+  if (!isValidPoint(point) || !point.lastSeenAt) return true;
+  const timestamp = new Date(point.lastSeenAt).getTime();
+  return !Number.isFinite(timestamp) || Date.now() - timestamp > STALE_LOCATION_MS;
+}
+
+function orderStatusLabel(status: string | null): string {
+  if (!status) return 'не указан';
+  return ORDER_STATUS_LABELS[status] ?? status;
+}
+
+function FitMapOnce({
+  points,
+}: {
+  points: Array<CourierMapPoint & { lat: number; lng: number }>;
+}) {
   const map = useMap();
   const fittedRef = useRef(false);
 
   useEffect(() => {
-    if (fittedRef.current || points.length === 0) {
-      return;
-    }
+    if (fittedRef.current || points.length === 0) return;
 
     fittedRef.current = true;
-
     if (points.length === 1) {
       map.setView([points[0].lat, points[0].lng], 15);
       return;
     }
 
     const bounds = L.latLngBounds(points.map((point) => [point.lat, point.lng]));
-    map.fitBounds(bounds, {
-      padding: [48, 48],
-      maxZoom: 15,
-    });
+    map.fitBounds(bounds, { padding: [48, 48], maxZoom: 15 });
   }, [map, points]);
+
+  return null;
+}
+
+function FocusSelected({ point }: { point: CourierMapPoint | null }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!point || !isValidPoint(point)) return;
+    map.flyTo([point.lat, point.lng], Math.max(map.getZoom(), 15), {
+      duration: 0.5,
+    });
+  }, [map, point]);
 
   return null;
 }
@@ -170,47 +198,42 @@ export default function CouriersMapView() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const requestIdRef = useRef(0);
 
   const loadMapPoints = useCallback(async (mode: 'initial' | 'refresh' = 'refresh') => {
+    const requestId = ++requestIdRef.current;
+    abortRef.current?.abort();
     const controller = new AbortController();
+    abortRef.current = controller;
+
+    if (mode === 'initial') setIsLoading(true);
+    else setIsRefreshing(true);
 
     try {
-      if (mode === 'initial') {
-        setIsLoading(true);
-      } else {
-        setIsRefreshing(true);
-      }
-
-      const response = await fetch('/api/proxy/couriers-map', {
+      const data = await apiFetch<CourierMapPoint[]>('/couriers-map', {
         method: 'GET',
-        credentials: 'include',
-        cache: 'no-store',
         signal: controller.signal,
       });
 
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(text || `Ошибка загрузки карты: ${response.status}`);
-      }
-
-      const data = (await response.json()) as CourierMapPoint[];
+      if (requestId !== requestIdRef.current) return;
 
       setPoints(Array.isArray(data) ? data : []);
       setError(null);
       setLastUpdatedAt(new Date());
     } catch (loadError) {
-      const message =
+      if (controller.signal.aborted || requestId !== requestIdRef.current) return;
+      setError(
         loadError instanceof Error
           ? loadError.message
-          : 'Не удалось загрузить карту курьеров';
-
-      setError(message);
+          : 'Не удалось загрузить карту курьеров',
+      );
     } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
+      if (requestId === requestIdRef.current) {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
     }
-
-    return () => controller.abort();
   }, []);
 
   useEffect(() => {
@@ -220,43 +243,56 @@ export default function CouriersMapView() {
       void loadMapPoints('refresh');
     }, REFRESH_INTERVAL_MS);
 
-    return () => window.clearInterval(intervalId);
+    return () => {
+      window.clearInterval(intervalId);
+      requestIdRef.current += 1;
+      abortRef.current?.abort();
+    };
   }, [loadMapPoints]);
 
-  const validPoints = useMemo(() => points.filter(isValidPoint), [points]);
-
-  const counts = useMemo(() => {
-    return {
-      online: points.filter((point) => point.isOnline && point.status !== 'BLOCKED').length,
+  const counts = useMemo(
+    () => ({
+      total: points.length,
+      available: points.filter((point) => point.status === 'ONLINE_IDLE').length,
       busy: points.filter((point) => point.status === 'BUSY').length,
       offline: points.filter((point) => point.status === 'OFFLINE').length,
       blocked: points.filter((point) => point.status === 'BLOCKED').length,
-    };
-  }, [points]);
+      noLocation: points.filter((point) => !isValidPoint(point)).length,
+    }),
+    [points],
+  );
 
-  const filteredPoints = useMemo(() => {
+  const filteredCouriers = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
 
-    return validPoints.filter((point) => {
+    return points.filter((point) => {
       const matchesFilter = filter === 'ALL' || point.status === filter;
-
       const matchesSearch =
         !normalizedSearch ||
         point.name.toLowerCase().includes(normalizedSearch) ||
+        point.firstName.toLowerCase().includes(normalizedSearch) ||
+        point.lastName.toLowerCase().includes(normalizedSearch) ||
         String(point.phone ?? '').toLowerCase().includes(normalizedSearch) ||
+        String(point.courierNumber).includes(normalizedSearch) ||
         String(point.activeOrderNumber ?? '').includes(normalizedSearch);
 
       return matchesFilter && matchesSearch;
     });
-  }, [filter, search, validPoints]);
+  }, [filter, points, search]);
+
+  const mappedPoints = useMemo(
+    () => filteredCouriers.filter(isValidPoint),
+    [filteredCouriers],
+  );
 
   const selectedCourier = useMemo(() => {
-    if (!selectedCourierId) {
-      return null;
-    }
+    if (!selectedCourierId) return null;
+    return points.find((point) => point.courierUserId === selectedCourierId) ?? null;
+  }, [points, selectedCourierId]);
 
-    return validPoints.find((point) => point.courierUserId === selectedCourierId) ?? null;
-  }, [selectedCourierId, validPoints]);
+  useEffect(() => {
+    if (selectedCourierId && !selectedCourier) setSelectedCourierId(null);
+  }, [selectedCourier, selectedCourierId]);
 
   return (
     <div className="space-y-6">
@@ -264,7 +300,7 @@ export default function CouriersMapView() {
         <div>
           <h1 className="text-2xl font-semibold text-slate-950">Карта курьеров</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Текущее местоположение, статус и активный заказ курьера
+            Оперативный статус, последний GPS-сигнал и активный заказ каждого курьера
           </p>
         </div>
 
@@ -276,41 +312,58 @@ export default function CouriersMapView() {
             disabled={isRefreshing}
           >
             <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-            Автообновление: 15 сек
+            Обновить
           </button>
 
-          {lastUpdatedAt ? (
-            <div className="rounded-xl bg-slate-100 px-4 py-2 text-sm text-slate-500">
-              Обновлено: {lastUpdatedAt.toLocaleTimeString('ru-RU')}
-            </div>
-          ) : null}
+          <div className="rounded-xl bg-slate-100 px-4 py-2 text-sm text-slate-500">
+            Автообновление: 15 сек
+            {lastUpdatedAt
+              ? ` · ${lastUpdatedAt.toLocaleTimeString('ru-RU')}`
+              : ''}
+          </div>
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
-        <StatusCard label="На линии" value={counts.online} className="bg-emerald-50 text-emerald-700" />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        <StatusCard label="Всего" value={counts.total} className="bg-violet-50 text-violet-700" />
+        <StatusCard label="На линии" value={counts.available} className="bg-emerald-50 text-emerald-700" />
         <StatusCard label="Заняты" value={counts.busy} className="bg-amber-50 text-amber-700" />
         <StatusCard label="Офлайн" value={counts.offline} className="bg-slate-100 text-slate-600" />
         <StatusCard label="Заблокированы" value={counts.blocked} className="bg-red-50 text-red-700" />
+        <StatusCard label="Без геопозиции" value={counts.noLocation} className="bg-orange-50 text-orange-700" />
       </div>
 
       {error ? (
-        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
+        <div className="flex items-center justify-between gap-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => void loadMapPoints('refresh')}
+            className="shrink-0 font-medium underline underline-offset-2"
+          >
+            Повторить
+          </button>
         </div>
       ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_390px]">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_410px]">
         <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
             <div>
               <div className="text-sm font-semibold text-slate-950">Живая карта</div>
               <div className="mt-0.5 text-xs text-slate-500">
-                Показаны только курьеры с координатами
+                Тусклый маркер означает, что GPS-сигнал старше 2 минут
               </div>
             </div>
-            <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-              {filteredPoints.length} на карте
+            <div className="flex gap-2 text-xs font-medium">
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">
+                {mappedPoints.length} на карте
+              </span>
+              {filteredCouriers.length - mappedPoints.length > 0 ? (
+                <span className="rounded-full bg-orange-50 px-3 py-1 text-orange-700">
+                  {filteredCouriers.length - mappedPoints.length} без GPS
+                </span>
+              ) : null}
             </div>
           </div>
 
@@ -326,51 +379,63 @@ export default function CouriersMapView() {
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               />
 
-              <FitMapOnce points={filteredPoints} />
+              <FitMapOnce points={mappedPoints} />
+              <FocusSelected point={selectedCourier} />
 
-              {filteredPoints.map((point) => {
+              {mappedPoints.map((point) => {
                 const meta = STATUS_META[point.status];
+                const stale = isLocationStale(point);
 
                 return (
                   <Marker
                     key={point.courierUserId}
                     position={[point.lat, point.lng]}
-                    icon={createCourierIcon(point.status)}
+                    icon={createCourierIcon(point.status, stale)}
                     eventHandlers={{
                       click: () => setSelectedCourierId(point.courierUserId),
                     }}
                   >
                     <Popup>
-                      <div className="w-[260px] space-y-2 text-sm">
+                      <div className="w-[280px] space-y-2 text-sm">
                         <div className="font-semibold text-slate-950">
-                          Курьер: {point.name}
+                          №{point.courierNumber} · {point.name}
                         </div>
-                        <div className="text-slate-600">Телефон: {point.phone ?? 'не указан'}</div>
+                        <div className="text-slate-600">
+                          Телефон: {point.phone ?? 'не указан'}
+                        </div>
                         <div>
                           Статус:{' '}
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-xs font-medium ${meta.badgeClassName}`}
-                          >
+                          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${meta.badgeClassName}`}>
                             {meta.label}
                           </span>
                         </div>
-                        <div className="text-slate-600">
-                          Последняя активность: {formatRelativeTime(point.lastSeenAt)}
+                        <div className={stale ? 'font-medium text-orange-700' : 'text-slate-600'}>
+                          GPS-сигнал: {formatRelativeTime(point.lastSeenAt)}
+                          {stale ? ' · устарел' : ''}
                         </div>
+                        <div className="text-slate-600">
+                          Последняя активность: {formatRelativeTime(point.lastActiveAt)}
+                        </div>
+
+                        {point.status === 'BLOCKED' ? (
+                          <div className="rounded-lg bg-red-50 p-2 text-red-700">
+                            Причина: {point.blockReason ?? 'не указана'}
+                          </div>
+                        ) : null}
 
                         {point.activeOrderNumber ? (
                           <div className="mt-3 border-t border-slate-100 pt-3">
                             <div className="font-medium text-slate-950">
-                              Заказ: №{point.activeOrderNumber}
+                              Заказ №{point.activeOrderNumber}
                             </div>
                             <div className="text-slate-600">
-                              Статус заказа: {point.activeOrderStatus ?? 'не указан'}
+                              Статус: {orderStatusLabel(point.activeOrderStatus)}
                             </div>
                             <div className="text-slate-600">
                               Ресторан: {point.restaurantName ?? 'не указан'}
                             </div>
                             <div className="text-slate-600">
-                              Адрес: {point.deliveryAddress ?? 'не указан'}
+                              Адрес доставки: {point.deliveryAddress ?? 'не указан'}
                             </div>
                           </div>
                         ) : null}
@@ -389,7 +454,17 @@ export default function CouriersMapView() {
 
         <aside className="rounded-3xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-100 p-5">
-            <div className="text-sm font-semibold text-slate-950">Курьеры</div>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-950">Курьеры</div>
+                <div className="mt-0.5 text-xs text-slate-500">
+                  В списке видны и курьеры без координат
+                </div>
+              </div>
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+                {filteredCouriers.length}
+              </span>
+            </div>
 
             <div className="mt-4 flex flex-wrap gap-2">
               {FILTERS.map((item) => (
@@ -413,7 +488,7 @@ export default function CouriersMapView() {
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Поиск по имени, телефону, заказу"
+                placeholder="Имя, телефон, № курьера или заказа"
                 className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
               />
             </div>
@@ -426,13 +501,13 @@ export default function CouriersMapView() {
               </div>
             ) : null}
 
-            {!isLoading && filteredPoints.length === 0 ? (
+            {!isLoading && filteredCouriers.length === 0 ? (
               <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">
-                Курьеры не найдены
+                По выбранному фильтру курьеры не найдены
               </div>
             ) : null}
 
-            {filteredPoints.map((point) => (
+            {filteredCouriers.map((point) => (
               <CourierListItem
                 key={point.courierUserId}
                 point={point}
@@ -471,11 +546,13 @@ function CourierListItem({
   isSelected,
   onSelect,
 }: {
-  point: CourierMapPoint & { lat: number; lng: number };
+  point: CourierMapPoint;
   isSelected: boolean;
   onSelect: () => void;
 }) {
   const meta = STATUS_META[point.status];
+  const hasLocation = isValidPoint(point);
+  const stale = hasLocation && isLocationStale(point);
 
   return (
     <button
@@ -495,9 +572,9 @@ function CourierListItem({
 
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
-            <div>
+            <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-slate-950">
-                {point.name}
+                №{point.courierNumber} · {point.name}
               </div>
               <div className="mt-0.5 text-xs text-slate-500">
                 {point.phone ?? 'телефон не указан'}
@@ -509,20 +586,49 @@ function CourierListItem({
             </span>
           </div>
 
-          <div className="mt-3 text-xs text-slate-500">
-            {point.lat.toFixed(5)}, {point.lng.toFixed(5)}
+          <div className="mt-3 flex items-center gap-1.5 text-xs">
+            {hasLocation ? (
+              <>
+                <MapPinOff className={`h-3.5 w-3.5 ${stale ? 'text-orange-500' : 'text-emerald-500'}`} />
+                <span className={stale ? 'font-medium text-orange-700' : 'text-slate-500'}>
+                  GPS: {formatRelativeTime(point.lastSeenAt)}{stale ? ' · устарел' : ''}
+                </span>
+              </>
+            ) : (
+              <>
+                <MapPinOff className="h-3.5 w-3.5 text-orange-500" />
+                <span className="font-medium text-orange-700">Геопозиция отсутствует</span>
+              </>
+            )}
           </div>
 
           <div className="mt-1 text-xs text-slate-500">
-            Последний сигнал: {formatRelativeTime(point.lastSeenAt)}
+            Активность: {formatRelativeTime(point.lastActiveAt)}
           </div>
+
+          {hasLocation ? (
+            <div className="mt-1 text-xs text-slate-400">
+              {point.lat.toFixed(5)}, {point.lng.toFixed(5)}
+            </div>
+          ) : null}
+
+          {point.status === 'BLOCKED' ? (
+            <div className="mt-3 rounded-xl bg-red-50 p-3 text-xs text-red-700">
+              Причина блокировки: {point.blockReason ?? 'не указана'}
+            </div>
+          ) : null}
 
           {point.activeOrderNumber ? (
             <div className="mt-3 rounded-xl bg-white/70 p-3 text-xs text-slate-600">
               <div className="font-medium text-slate-950">Заказ №{point.activeOrderNumber}</div>
-              <div className="mt-1">Статус: {point.activeOrderStatus ?? 'не указан'}</div>
+              <div className="mt-1">Статус: {orderStatusLabel(point.activeOrderStatus)}</div>
               <div>Ресторан: {point.restaurantName ?? 'не указан'}</div>
               <div>Адрес: {point.deliveryAddress ?? 'не указан'}</div>
+              {!point.isOnline && point.status === 'BUSY' ? (
+                <div className="mt-2 font-medium text-red-700">
+                  Внимание: курьер с активным заказом сейчас офлайн
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
