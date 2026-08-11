@@ -1,21 +1,20 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
-  Download,
-  Edit3,
+  Copy,
   Eye,
   EyeOff,
-  Filter,
+  KeyRound,
   Plus,
   RefreshCw,
-  Shield,
   ShieldCheck,
   ShieldOff,
+  UserCog,
   Users,
   X,
 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { apiFetch } from '@/lib/api';
 
@@ -28,26 +27,29 @@ type AdminRoleCode =
 
 type AdminUser = {
   id: string;
-  userId?: string;
-  phone?: string | null;
-  email?: string | null;
-  firstName?: string | null;
-  lastName?: string | null;
   isActive?: boolean;
   deletedAt?: string | null;
   lastLoginAt?: string | null;
   createdAt?: string | null;
+  activeRoleCodes?: string[];
   roles?: Array<{
     code?: string;
     name?: string;
+    revokedAt?: string | null;
+    expiresAt?: string | null;
   }>;
-  roleCodes?: string[];
   user?: {
+    id?: string;
     phone?: string | null;
     email?: string | null;
     firstName?: string | null;
     lastName?: string | null;
   };
+};
+
+type CurrentAdmin = {
+  roleCodes?: string[];
+  activeRoleCodes?: string[];
 };
 
 type CreateAdminForm = {
@@ -66,32 +68,32 @@ const ROLE_OPTIONS: Array<{
 }> = [
   {
     code: 'SUPER_ADMIN',
-    label: 'SUPER_ADMIN',
-    description: 'Полный доступ к системе',
+    label: 'Супер-администратор',
+    description: 'Полный доступ, сотрудники, безопасность и критичные настройки.',
   },
   {
     code: 'ADMIN',
-    label: 'ADMIN',
-    description: 'Основные разделы админки',
+    label: 'Администратор',
+    description: 'Операционное управление основными разделами JETKIZ.',
   },
   {
     code: 'FINANCE',
-    label: 'FINANCE',
-    description: 'Финансы и выплаты',
+    label: 'Финансовый администратор',
+    description: 'Финансы, выплаты, комиссии и финансовые отчёты.',
   },
   {
     code: 'SUPPORT',
-    label: 'SUPPORT',
-    description: 'Поддержка и отзывы',
+    label: 'Специалист поддержки',
+    description: 'Клиенты, отзывы, обращения и поддержка пользователей.',
   },
   {
     code: 'DISPATCHER',
-    label: 'DISPATCHER',
-    description: 'Заказы и диспетчеризация',
+    label: 'Диспетчер',
+    description: 'Заказы, курьеры и оперативная диспетчеризация.',
   },
 ];
 
-const emptyForm: CreateAdminForm = {
+const EMPTY_FORM: CreateAdminForm = {
   phone: '',
   password: '',
   firstName: '',
@@ -100,42 +102,40 @@ const emptyForm: CreateAdminForm = {
   roleCodes: ['ADMIN'],
 };
 
-function getAdminRoles(admin: AdminUser): string[] {
-  if (Array.isArray(admin.roleCodes)) {
-    return admin.roleCodes.filter(Boolean);
+function roleLabel(code: string): string {
+  return ROLE_OPTIONS.find((item) => item.code === code)?.label ?? code;
+}
+
+function getRoles(admin: AdminUser): string[] {
+  if (Array.isArray(admin.activeRoleCodes) && admin.activeRoleCodes.length > 0) {
+    return admin.activeRoleCodes;
   }
 
-  if (Array.isArray(admin.roles)) {
-    return admin.roles
-      .map((role) => role.code || role.name)
-      .filter(Boolean) as string[];
-  }
-
-  return [];
+  return (admin.roles ?? [])
+    .filter((item) => !item.revokedAt)
+    .map((item) => item.code || item.name || '')
+    .filter(Boolean);
 }
 
-function getAdminName(admin: AdminUser): string {
-  const firstName = admin.firstName ?? admin.user?.firstName ?? '';
-  const lastName = admin.lastName ?? admin.user?.lastName ?? '';
-  const full = `${firstName} ${lastName}`.trim();
+function getName(admin: AdminUser): string {
+  const full = [admin.user?.firstName, admin.user?.lastName]
+    .map((value) => String(value ?? '').trim())
+    .filter(Boolean)
+    .join(' ');
 
-  return full || admin.phone || admin.user?.phone || 'Без имени';
+  return full || admin.user?.phone || 'Без имени';
 }
 
-function getAdminPhone(admin: AdminUser): string {
-  return admin.phone ?? admin.user?.phone ?? '—';
-}
-
-function getAdminEmail(admin: AdminUser): string {
-  return admin.email ?? admin.user?.email ?? '—';
+function getPosition(admin: AdminUser): string {
+  const roles = getRoles(admin);
+  if (!roles.length) return 'Должность не назначена';
+  return roles.map(roleLabel).join(', ');
 }
 
 function formatDate(value?: string | null): string {
   if (!value) return '—';
-
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
-
   return date.toLocaleString('ru-RU', {
     day: '2-digit',
     month: '2-digit',
@@ -145,135 +145,137 @@ function formatDate(value?: string | null): string {
   });
 }
 
-function roleBadgeClass(role: string): string {
-  if (role === 'SUPER_ADMIN') return 'bg-purple-100 text-purple-700';
-  if (role === 'FINANCE') return 'bg-orange-100 text-orange-700';
-  if (role === 'SUPPORT') return 'bg-pink-100 text-pink-700';
-  if (role === 'DISPATCHER') return 'bg-cyan-100 text-cyan-700';
-  return 'bg-blue-100 text-blue-700';
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
 }
 
-function normalizeAdminList(response: unknown): AdminUser[] {
-  if (Array.isArray(response)) return response as AdminUser[];
-
-  const data = response as any;
-
-  if (Array.isArray(data?.items)) return data.items;
-  if (Array.isArray(data?.admins)) return data.admins;
-  if (Array.isArray(data?.data)) return data.data;
-
+function normalizeAdminList(value: unknown): AdminUser[] {
+  if (Array.isArray(value)) return value as AdminUser[];
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.items)) return record.items as AdminUser[];
+    if (Array.isArray(record.admins)) return record.admins as AdminUser[];
+  }
   return [];
 }
 
-export default function RolesAndPermissionsPage() {
+export default function AdminsPage() {
   const [admins, setAdmins] = useState<AdminUser[]>([]);
+  const [currentAdmin, setCurrentAdmin] = useState<CurrentAdmin | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-
   const [query, setQuery] = useState('');
-  const [roleFilter, setRoleFilter] = useState<'ALL' | AdminRoleCode>('ALL');
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'DISABLED'>(
-    'ALL',
-  );
-  const [includeInactive, setIncludeInactive] = useState(true);
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [rolesOpen, setRolesOpen] = useState(false);
-  const [selectedAdmin, setSelectedAdmin] = useState<AdminUser | null>(null);
+  const [createPasswordVisible, setCreatePasswordVisible] = useState(false);
+  const [form, setForm] = useState<CreateAdminForm>(EMPTY_FORM);
+  const [createdCredentials, setCreatedCredentials] = useState<{
+    name: string;
+    phone: string;
+    password: string;
+  } | null>(null);
 
-  const [form, setForm] = useState<CreateAdminForm>(emptyForm);
+  const [rolesAdmin, setRolesAdmin] = useState<AdminUser | null>(null);
   const [editRoleCodes, setEditRoleCodes] = useState<AdminRoleCode[]>([]);
 
-  const filteredAdmins = useMemo(() => {
-    const q = query.trim().toLowerCase();
+  const [passwordAdmin, setPasswordAdmin] = useState<AdminUser | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [newPasswordVisible, setNewPasswordVisible] = useState(false);
 
-    return admins.filter((admin) => {
-      const roles = getAdminRoles(admin);
-      const active = admin.isActive !== false && !admin.deletedAt;
-
-      if (statusFilter === 'ACTIVE' && !active) return false;
-      if (statusFilter === 'DISABLED' && active) return false;
-      if (roleFilter !== 'ALL' && !roles.includes(roleFilter)) return false;
-
-      if (!q) return true;
-
-      const haystack = [
-        getAdminName(admin),
-        getAdminPhone(admin),
-        getAdminEmail(admin),
-        roles.join(' '),
-      ]
-        .join(' ')
-        .toLowerCase();
-
-      return haystack.includes(q);
-    });
-  }, [admins, query, roleFilter, statusFilter]);
-
-  const stats = useMemo(() => {
-    const active = admins.filter((admin) => admin.isActive !== false && !admin.deletedAt);
-    const disabled = admins.length - active.length;
-    const superAdmins = admins.filter((admin) =>
-      getAdminRoles(admin).includes('SUPER_ADMIN'),
-    );
-
-    return {
-      total: admins.length,
-      active: active.length,
-      disabled,
-      superAdmins: superAdmins.length,
-      roles: ROLE_OPTIONS.length,
-    };
-  }, [admins]);
-
-  async function loadAdmins() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
 
     try {
-      const response = await apiFetch(
-        `/admin/users?includeInactive=${includeInactive ? 'true' : 'false'}`,
-        {
-          cache: 'no-store',
-        },
-      );
+      const [adminsResult, meResult] = await Promise.allSettled([
+        apiFetch('/admin/users?includeInactive=true', { cache: 'no-store' }),
+        apiFetch('/admin/auth/me', { cache: 'no-store' }),
+      ]);
 
-      setAdmins(normalizeAdminList(response));
-    } catch (e: any) {
-      setError(e?.message || 'Не удалось загрузить администраторов');
+      if (adminsResult.status !== 'fulfilled') {
+        throw adminsResult.reason;
+      }
+
+      setAdmins(normalizeAdminList(adminsResult.value));
+      setCurrentAdmin(
+        meResult.status === 'fulfilled' && meResult.value && typeof meResult.value === 'object'
+          ? (meResult.value as CurrentAdmin)
+          : null,
+      );
+    } catch (loadError) {
+      setAdmins([]);
+      setError(getErrorMessage(loadError, 'Не удалось загрузить сотрудников'));
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
-    loadAdmins();
-  }, [includeInactive]);
+    void load();
+  }, [load]);
 
-  function toggleFormRole(role: AdminRoleCode) {
-    setForm((prev) => {
-      const exists = prev.roleCodes.includes(role);
+  const currentRoleCodes = [
+    ...(currentAdmin?.roleCodes ?? []),
+    ...(currentAdmin?.activeRoleCodes ?? []),
+  ];
+  const isSuperAdmin = currentRoleCodes.includes('SUPER_ADMIN');
+
+  const filteredAdmins = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return admins;
+
+    return admins.filter((admin) =>
+      [
+        getName(admin),
+        admin.user?.phone,
+        admin.user?.email,
+        getPosition(admin),
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(normalized),
+    );
+  }, [admins, query]);
+
+  const stats = useMemo(() => {
+    const active = admins.filter((admin) => admin.isActive !== false && !admin.deletedAt);
+    return {
+      total: admins.length,
+      active: active.length,
+      disabled: admins.length - active.length,
+      superAdmins: admins.filter((admin) => getRoles(admin).includes('SUPER_ADMIN')).length,
+    };
+  }, [admins]);
+
+  function toggleCreateRole(code: AdminRoleCode) {
+    setForm((previous) => {
+      const exists = previous.roleCodes.includes(code);
       const next = exists
-        ? prev.roleCodes.filter((item) => item !== role)
-        : [...prev.roleCodes, role];
-
-      return {
-        ...prev,
-        roleCodes: next.length ? next : ['ADMIN'],
-      };
+        ? previous.roleCodes.filter((item) => item !== code)
+        : [...previous.roleCodes, code];
+      return { ...previous, roleCodes: next.length ? next : ['ADMIN'] };
     });
   }
 
-  function toggleEditRole(role: AdminRoleCode) {
-    setEditRoleCodes((prev) => {
-      const exists = prev.includes(role);
-      const next = exists
-        ? prev.filter((item) => item !== role)
-        : [...prev, role];
+  function openRoles(admin: AdminUser) {
+    setRolesAdmin(admin);
+    setEditRoleCodes(
+      getRoles(admin).filter((code): code is AdminRoleCode =>
+        ROLE_OPTIONS.some((item) => item.code === code),
+      ),
+    );
+  }
 
+  function toggleEditRole(code: AdminRoleCode) {
+    setEditRoleCodes((previous) => {
+      const exists = previous.includes(code);
+      const next = exists
+        ? previous.filter((item) => item !== code)
+        : [...previous, code];
       return next.length ? next : ['ADMIN'];
     });
   }
@@ -284,679 +286,419 @@ export default function RolesAndPermissionsPage() {
     setSuccess(null);
 
     try {
-      if (!form.phone.trim()) {
-        throw new Error('Телефон обязателен');
-      }
+      if (!form.phone.trim()) throw new Error('Укажите телефон сотрудника');
+      if (!form.firstName.trim()) throw new Error('Укажите имя сотрудника');
+      if (!form.password.trim()) throw new Error('Укажите пароль');
+      if (!form.roleCodes.length) throw new Error('Выберите должность');
 
-      if (!form.password.trim()) {
-        throw new Error('Пароль обязателен');
-      }
-
-      if (!form.roleCodes.length) {
-        throw new Error('Выберите минимум одну роль');
-      }
+      const passwordSnapshot = form.password;
+      const phoneSnapshot = form.phone.trim();
+      const nameSnapshot = [form.firstName.trim(), form.lastName.trim()]
+        .filter(Boolean)
+        .join(' ');
 
       await apiFetch('/admin/users', {
         method: 'POST',
         body: JSON.stringify({
-          phone: form.phone.trim(),
-          password: form.password,
-          firstName: form.firstName.trim() || undefined,
+          phone: phoneSnapshot,
+          password: passwordSnapshot,
+          firstName: form.firstName.trim(),
           lastName: form.lastName.trim() || undefined,
           email: form.email.trim() || undefined,
           roleCodes: form.roleCodes,
         }),
       });
 
+      setCreatedCredentials({
+        name: nameSnapshot,
+        phone: phoneSnapshot,
+        password: passwordSnapshot,
+      });
       setCreateOpen(false);
-      setForm(emptyForm);
-      setSuccess('Администратор создан');
-      await loadAdmins();
-    } catch (e: any) {
-      setError(e?.message || 'Не удалось создать администратора');
+      setForm(EMPTY_FORM);
+      setCreatePasswordVisible(false);
+      setSuccess('Сотрудник создан. Сохраните его данные для первого входа.');
+      await load();
+    } catch (createError) {
+      setError(getErrorMessage(createError, 'Не удалось создать сотрудника'));
     } finally {
       setSaving(false);
     }
-  }
-
-  function openRolesModal(admin: AdminUser) {
-    setSelectedAdmin(admin);
-    setEditRoleCodes(
-      getAdminRoles(admin).filter((role): role is AdminRoleCode =>
-        ROLE_OPTIONS.some((option) => option.code === role),
-      ),
-    );
-    setRolesOpen(true);
   }
 
   async function saveRoles() {
-    if (!selectedAdmin) return;
-
+    if (!rolesAdmin) return;
     setSaving(true);
     setError(null);
-    setSuccess(null);
 
     try {
-      await apiFetch(`/admin/users/${selectedAdmin.id}/roles`, {
+      await apiFetch(`/admin/users/${rolesAdmin.id}/roles`, {
         method: 'PATCH',
-        body: JSON.stringify({
-          roleCodes: editRoleCodes,
-        }),
+        body: JSON.stringify({ roleCodes: editRoleCodes }),
       });
-
-      setRolesOpen(false);
-      setSelectedAdmin(null);
-      setSuccess('Роли обновлены');
-      await loadAdmins();
-    } catch (e: any) {
-      setError(e?.message || 'Не удалось обновить роли');
+      setRolesAdmin(null);
+      setSuccess('Должность и права обновлены');
+      await load();
+    } catch (saveError) {
+      setError(getErrorMessage(saveError, 'Не удалось изменить права'));
     } finally {
       setSaving(false);
     }
   }
 
-  async function deactivateAdmin(admin: AdminUser) {
-    if (!window.confirm(`Отключить администратора "${getAdminName(admin)}"?`)) {
+  async function resetPassword() {
+    if (!passwordAdmin) return;
+    setSaving(true);
+    setError(null);
+
+    try {
+      if (!newPassword.trim()) throw new Error('Введите новый пароль');
+
+      await apiFetch(`/admin/users/${passwordAdmin.id}/password`, {
+        method: 'POST',
+        body: JSON.stringify({ password: newPassword }),
+      });
+
+      const targetName = getName(passwordAdmin);
+      const targetPhone = passwordAdmin.user?.phone ?? '—';
+      setCreatedCredentials({
+        name: targetName,
+        phone: targetPhone,
+        password: newPassword,
+      });
+      setPasswordAdmin(null);
+      setNewPassword('');
+      setNewPasswordVisible(false);
+      setSuccess('Пароль изменён. Все старые сессии этого сотрудника завершены.');
+    } catch (passwordError) {
+      setError(getErrorMessage(passwordError, 'Не удалось изменить пароль'));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleActive(admin: AdminUser) {
+    const active = admin.isActive !== false && !admin.deletedAt;
+    if (!window.confirm(`${active ? 'Отключить' : 'Включить'} сотрудника «${getName(admin)}»?`)) {
       return;
     }
 
     setSaving(true);
     setError(null);
-    setSuccess(null);
-
     try {
-      await apiFetch(`/admin/users/${admin.id}/deactivate`, {
+      await apiFetch(`/admin/users/${admin.id}/${active ? 'deactivate' : 'reactivate'}`, {
         method: 'POST',
       });
-
-      setSuccess('Администратор отключён');
-      await loadAdmins();
-    } catch (e: any) {
-      setError(e?.message || 'Не удалось отключить администратора');
+      setSuccess(active ? 'Сотрудник отключён' : 'Сотрудник включён');
+      await load();
+    } catch (toggleError) {
+      setError(getErrorMessage(toggleError, 'Не удалось изменить статус сотрудника'));
     } finally {
       setSaving(false);
     }
   }
 
-  async function reactivateAdmin(admin: AdminUser) {
-    setSaving(true);
-    setError(null);
-    setSuccess(null);
-
-    try {
-      await apiFetch(`/admin/users/${admin.id}/reactivate`, {
-        method: 'POST',
-      });
-
-      setSuccess('Администратор включён');
-      await loadAdmins();
-    } catch (e: any) {
-      setError(e?.message || 'Не удалось включить администратора');
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  function exportCsv() {
-    const rows = [
-      ['Имя', 'Телефон', 'Email', 'Роли', 'Статус', 'Последний вход', 'Создан'],
-      ...filteredAdmins.map((admin) => [
-        getAdminName(admin),
-        getAdminPhone(admin),
-        getAdminEmail(admin),
-        getAdminRoles(admin).join(', '),
-        admin.isActive !== false && !admin.deletedAt ? 'Активен' : 'Отключён',
-        formatDate(admin.lastLoginAt),
-        formatDate(admin.createdAt),
-      ]),
-    ];
-
-    const csv = rows
-      .map((row) =>
-        row
-          .map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`)
-          .join(';'),
-      )
-      .join('\n');
-
-    const blob = new Blob([`\uFEFF${csv}`], {
-      type: 'text/csv;charset=utf-8',
-    });
-
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-
-    a.href = url;
-    a.download = `jetkiz-admins-${Date.now()}.csv`;
-    a.click();
-
-    URL.revokeObjectURL(url);
+  async function copyCredentials() {
+    if (!createdCredentials) return;
+    const text = `${createdCredentials.name}\nТелефон: ${createdCredentials.phone}\nПароль: ${createdCredentials.password}`;
+    await navigator.clipboard.writeText(text);
+    setSuccess('Данные для входа скопированы');
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 px-8 py-7 text-slate-950">
-      <div className="mb-7 flex items-start justify-between gap-4">
-        <div>
-          <div className="mb-3 flex items-center gap-2 text-sm text-slate-500">
-            <span>Главная</span>
-            <span>›</span>
-            <span>Управление</span>
-            <span>›</span>
-            <span className="font-medium text-slate-800">Роли и права</span>
+    <main className="min-h-screen bg-slate-50 p-6 text-slate-950">
+      <div className="mx-auto max-w-[1600px] space-y-5">
+        <header className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold">Сотрудники и доступ</h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Создание сотрудников, должности, права и безопасность учётных записей.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              Обновить
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              className="inline-flex h-10 items-center gap-2 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white hover:bg-violet-700"
+            >
+              <Plus className="h-4 w-4" />
+              Добавить сотрудника
+            </button>
+          </div>
+        </header>
+
+        {error ? (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+            {error}
+          </div>
+        ) : null}
+
+        {success ? (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
+            {success}
+          </div>
+        ) : null}
+
+        {createdCredentials ? (
+          <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="font-bold text-amber-950">Данные для входа</div>
+                <div className="mt-1 text-sm text-amber-800">
+                  {createdCredentials.name} · {createdCredentials.phone}
+                </div>
+                <div className="mt-3 rounded-lg bg-white px-3 py-2 font-mono text-sm text-slate-950">
+                  {createdCredentials.password}
+                </div>
+                <p className="mt-2 text-xs text-amber-800">
+                  Пароли хранятся на сервере только в виде хеша. Этот пароль доступен здесь только пока открыта текущая страница.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => void copyCredentials()}
+                  className="inline-flex h-9 items-center gap-2 rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold text-amber-900"
+                >
+                  <Copy className="h-4 w-4" /> Копировать
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCreatedCredentials(null)}
+                  className="h-9 rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold text-amber-900"
+                >
+                  Скрыть
+                </button>
+              </div>
+            </div>
+          </section>
+        ) : null}
+
+        <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <Stat title="Всего сотрудников" value={stats.total} icon={<Users className="h-5 w-5" />} />
+          <Stat title="Активные" value={stats.active} icon={<CheckCircle2 className="h-5 w-5" />} />
+          <Stat title="Отключённые" value={stats.disabled} icon={<ShieldOff className="h-5 w-5" />} />
+          <Stat title="Супер-администраторы" value={stats.superAdmins} icon={<ShieldCheck className="h-5 w-5" />} />
+        </section>
+
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-100 p-4">
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Поиск по имени, телефону, почте или должности"
+              className="h-11 w-full max-w-xl rounded-xl border border-slate-200 px-4 text-sm outline-none focus:border-violet-400"
+            />
           </div>
 
-          <h1 className="text-3xl font-bold tracking-tight">Роли и права</h1>
-          <p className="mt-2 text-sm text-slate-500">
-            Управление администраторами, ролями и доступами в системе
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <button
-            onClick={exportCsv}
-            className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-          >
-            <Download className="h-4 w-4" />
-            Экспорт
-          </button>
-
-          <button
-            onClick={loadAdmins}
-            className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-          >
-            <RefreshCw className="h-4 w-4" />
-            Обновить
-          </button>
-
-          <button
-            onClick={() => setCreateOpen(true)}
-            className="inline-flex h-11 items-center gap-2 rounded-xl bg-indigo-600 px-5 text-sm font-semibold text-white shadow-lg shadow-indigo-200 hover:bg-indigo-700"
-          >
-            <Plus className="h-4 w-4" />
-            Добавить админа
-          </button>
-        </div>
-      </div>
-
-      {error && (
-        <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
-          {error}
-        </div>
-      )}
-
-      {success && (
-        <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
-          {success}
-        </div>
-      )}
-
-      <section className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <StatCard
-          icon={<Users className="h-6 w-6" />}
-          title="Всего админов"
-          value={stats.total}
-          tone="blue"
-        />
-        <StatCard
-          icon={<CheckCircle2 className="h-6 w-6" />}
-          title="Активные"
-          value={stats.active}
-          tone="green"
-        />
-        <StatCard
-          icon={<ShieldOff className="h-6 w-6" />}
-          title="Отключённые"
-          value={stats.disabled}
-          tone="orange"
-        />
-        <StatCard
-          icon={<ShieldCheck className="h-6 w-6" />}
-          title="SUPER_ADMIN"
-          value={stats.superAdmins}
-          tone="purple"
-        />
-        <StatCard
-          icon={<Shield className="h-6 w-6" />}
-          title="Всего ролей"
-          value={stats.roles}
-          tone="indigo"
-        />
-      </section>
-
-      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 p-4">
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Поиск по имени, телефону или email..."
-            className="h-11 min-w-[280px] flex-1 rounded-xl border border-slate-200 px-4 text-sm outline-none focus:border-indigo-400"
-          />
-
-          <select
-            value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value as any)}
-            className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-indigo-400"
-          >
-            <option value="ALL">Все роли</option>
-            {ROLE_OPTIONS.map((role) => (
-              <option key={role.code} value={role.code}>
-                {role.label}
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as any)}
-            className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-indigo-400"
-          >
-            <option value="ALL">Все статусы</option>
-            <option value="ACTIVE">Активные</option>
-            <option value="DISABLED">Отключённые</option>
-          </select>
-
-          <button
-            onClick={() => setIncludeInactive((v) => !v)}
-            className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            <Filter className="h-4 w-4" />
-            {includeInactive ? 'Скрыть отключённых' : 'Показать отключённых'}
-          </button>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[1000px] text-left text-sm">
-            <thead>
-              <tr className="border-b border-slate-100 bg-slate-50 text-xs uppercase text-slate-500">
-                <th className="px-5 py-4">Админ</th>
-                <th className="px-5 py-4">Телефон</th>
-                <th className="px-5 py-4">Email</th>
-                <th className="px-5 py-4">Роли</th>
-                <th className="px-5 py-4">Статус</th>
-                <th className="px-5 py-4">Последний вход</th>
-                <th className="px-5 py-4">Создан</th>
-                <th className="px-5 py-4 text-right">Действия</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {loading ? (
+          <div className="overflow-x-auto">
+            <table className="min-w-[1100px] w-full text-left text-sm">
+              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
-                  <td colSpan={8} className="px-5 py-10 text-center text-slate-500">
-                    Загрузка...
-                  </td>
+                  <th className="px-4 py-3">Сотрудник</th>
+                  <th className="px-4 py-3">Должность</th>
+                  <th className="px-4 py-3">Телефон</th>
+                  <th className="px-4 py-3">Почта</th>
+                  <th className="px-4 py-3">Статус</th>
+                  <th className="px-4 py-3">Последний вход</th>
+                  <th className="px-4 py-3 text-right">Действия</th>
                 </tr>
-              ) : filteredAdmins.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="px-5 py-10 text-center text-slate-500">
-                    Администраторы не найдены
-                  </td>
-                </tr>
-              ) : (
-                filteredAdmins.map((admin) => {
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {loading ? (
+                  <tr><td colSpan={7} className="px-4 py-12 text-center text-slate-500">Загрузка...</td></tr>
+                ) : filteredAdmins.length === 0 ? (
+                  <tr><td colSpan={7} className="px-4 py-12 text-center text-slate-500">Сотрудники не найдены</td></tr>
+                ) : filteredAdmins.map((admin) => {
                   const active = admin.isActive !== false && !admin.deletedAt;
-                  const roles = getAdminRoles(admin);
-
                   return (
-                    <tr
-                      key={admin.id}
-                      className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60"
-                    >
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-indigo-100 text-sm font-bold text-indigo-700">
-                            {getAdminName(admin).slice(0, 1).toUpperCase()}
-                          </div>
-                          <div>
-                            <div className="font-semibold text-slate-900">
-                              {getAdminName(admin)}
-                            </div>
-                            <div className="text-xs text-slate-500">
-                              ID: {admin.id.slice(0, 8)}
-                            </div>
-                          </div>
-                        </div>
+                    <tr key={admin.id} className="hover:bg-slate-50">
+                      <td className="px-4 py-3">
+                        <div className="font-semibold text-slate-950">{getName(admin)}</div>
+                        <div className="text-xs text-slate-400">Добавлен {formatDate(admin.createdAt)}</div>
                       </td>
-
-                      <td className="px-5 py-4 text-slate-700">
-                        {getAdminPhone(admin)}
-                      </td>
-
-                      <td className="px-5 py-4 text-slate-700">
-                        {getAdminEmail(admin)}
-                      </td>
-
-                      <td className="px-5 py-4">
-                        <div className="flex max-w-[260px] flex-wrap gap-1.5">
-                          {roles.length ? (
-                            roles.map((role) => (
-                              <span
-                                key={role}
-                                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${roleBadgeClass(
-                                  role,
-                                )}`}
-                              >
-                                {role}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                        </div>
-                      </td>
-
-                      <td className="px-5 py-4">
-                        <span
-                          className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold ${
-                            active
-                              ? 'bg-emerald-100 text-emerald-700'
-                              : 'bg-red-100 text-red-700'
-                          }`}
-                        >
-                          <span
-                            className={`h-1.5 w-1.5 rounded-full ${
-                              active ? 'bg-emerald-500' : 'bg-red-500'
-                            }`}
-                          />
+                      <td className="px-4 py-3 font-medium text-slate-700">{getPosition(admin)}</td>
+                      <td className="px-4 py-3 text-slate-600">{admin.user?.phone || '—'}</td>
+                      <td className="px-4 py-3 text-slate-600">{admin.user?.email || '—'}</td>
+                      <td className="px-4 py-3">
+                        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${active ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
                           {active ? 'Активен' : 'Отключён'}
                         </span>
                       </td>
-
-                      <td className="px-5 py-4 text-slate-700">
-                        {formatDate(admin.lastLoginAt)}
-                      </td>
-
-                      <td className="px-5 py-4 text-slate-700">
-                        {formatDate(admin.createdAt)}
-                      </td>
-
-                      <td className="px-5 py-4">
+                      <td className="px-4 py-3 text-slate-600">{formatDate(admin.lastLoginAt)}</td>
+                      <td className="px-4 py-3">
                         <div className="flex justify-end gap-2">
                           <button
-                            onClick={() => openRolesModal(admin)}
-                            disabled={saving}
-                            className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            type="button"
+                            onClick={() => openRoles(admin)}
+                            className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs font-semibold hover:bg-slate-50"
                           >
-                            <Edit3 className="h-3.5 w-3.5" />
-                            Роли
+                            <UserCog className="h-4 w-4" /> Доступ
                           </button>
-
-                          {active ? (
+                          {isSuperAdmin ? (
                             <button
-                              onClick={() => deactivateAdmin(admin)}
-                              disabled={saving}
-                              className="inline-flex h-9 items-center gap-2 rounded-lg border border-red-200 bg-white px-3 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+                              type="button"
+                              onClick={() => {
+                                setPasswordAdmin(admin);
+                                setNewPassword('');
+                                setNewPasswordVisible(false);
+                              }}
+                              className="inline-flex h-9 items-center gap-2 rounded-lg border border-violet-200 px-3 text-xs font-semibold text-violet-700 hover:bg-violet-50"
                             >
-                              <EyeOff className="h-3.5 w-3.5" />
-                              Отключить
+                              <KeyRound className="h-4 w-4" /> Пароль
                             </button>
-                          ) : (
-                            <button
-                              onClick={() => reactivateAdmin(admin)}
-                              disabled={saving}
-                              className="inline-flex h-9 items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 text-xs font-semibold text-emerald-600 hover:bg-emerald-50 disabled:opacity-50"
-                            >
-                              <Eye className="h-3.5 w-3.5" />
-                              Включить
-                            </button>
-                          )}
+                          ) : null}
+                          <button
+                            type="button"
+                            disabled={saving}
+                            onClick={() => void toggleActive(admin)}
+                            className={`h-9 rounded-lg border px-3 text-xs font-semibold ${active ? 'border-rose-200 text-rose-700 hover:bg-rose-50' : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'}`}
+                          >
+                            {active ? 'Отключить' : 'Включить'}
+                          </button>
                         </div>
                       </td>
                     </tr>
                   );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="flex items-center justify-between border-t border-slate-100 px-5 py-4 text-sm text-slate-500">
-          <span>
-            Показано {filteredAdmins.length} из {admins.length}
-          </span>
-          <span>Данные из /admin/users</span>
-        </div>
-      </section>
-
-      <section className="mt-6 grid grid-cols-1 gap-4 xl:grid-cols-4">
-        {ROLE_OPTIONS.map((role) => (
-          <div
-            key={role.code}
-            className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
-          >
-            <div className="mb-3 flex items-center justify-between">
-              <span
-                className={`rounded-full px-3 py-1 text-xs font-bold ${roleBadgeClass(
-                  role.code,
-                )}`}
-              >
-                {role.label}
-              </span>
-              <Shield className="h-5 w-5 text-slate-400" />
-            </div>
-            <p className="text-sm font-medium text-slate-900">{role.description}</p>
-            <p className="mt-2 text-xs text-slate-500">
-              Назначается администраторам через backend RBAC.
-            </p>
+                })}
+              </tbody>
+            </table>
           </div>
-        ))}
-      </section>
+        </section>
+      </div>
 
-      {createOpen && (
-        <Modal title="Добавить админа" onClose={() => setCreateOpen(false)}>
+      {createOpen ? (
+        <Modal title="Новый сотрудник" onClose={() => setCreateOpen(false)}>
           <div className="space-y-4">
-            <Input
-              label="Телефон *"
-              value={form.phone}
-              onChange={(value) => setForm((prev) => ({ ...prev, phone: value }))}
-              placeholder="+7 700 000 00 00"
-            />
-
-            <Input
+            <Input label="Имя *" value={form.firstName} onChange={(value) => setForm((previous) => ({ ...previous, firstName: value }))} />
+            <Input label="Фамилия" value={form.lastName} onChange={(value) => setForm((previous) => ({ ...previous, lastName: value }))} />
+            <Input label="Телефон *" value={form.phone} onChange={(value) => setForm((previous) => ({ ...previous, phone: value }))} placeholder="+7 700 000 00 00" />
+            <Input label="Почта" value={form.email} onChange={(value) => setForm((previous) => ({ ...previous, email: value }))} placeholder="name@jetkiz.asia" />
+            <PasswordInput
               label="Пароль *"
               value={form.password}
-              onChange={(value) => setForm((prev) => ({ ...prev, password: value }))}
-              placeholder="Минимум 6 символов"
-              type="password"
+              visible={createPasswordVisible}
+              onToggle={() => setCreatePasswordVisible((value) => !value)}
+              onChange={(value) => setForm((previous) => ({ ...previous, password: value }))}
             />
-
-            <div className="grid grid-cols-2 gap-3">
-              <Input
-                label="Имя"
-                value={form.firstName}
-                onChange={(value) =>
-                  setForm((prev) => ({ ...prev, firstName: value }))
-                }
-                placeholder="Введите имя"
-              />
-
-              <Input
-                label="Фамилия"
-                value={form.lastName}
-                onChange={(value) =>
-                  setForm((prev) => ({ ...prev, lastName: value }))
-                }
-                placeholder="Введите фамилию"
-              />
-            </div>
-
-            <Input
-              label="Email"
-              value={form.email}
-              onChange={(value) => setForm((prev) => ({ ...prev, email: value }))}
-              placeholder="example@jetkiz.com"
-            />
-
-            <RoleCheckboxes
-              value={form.roleCodes}
-              onToggle={toggleFormRole}
-            />
-
-            <div className="flex justify-end gap-3 pt-3">
-              <button
-                onClick={() => setCreateOpen(false)}
-                className="h-11 rounded-xl border border-slate-200 px-5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                Отмена
-              </button>
-
-              <button
-                onClick={createAdmin}
-                disabled={saving}
-                className="h-11 rounded-xl bg-indigo-600 px-5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
-              >
-                {saving ? 'Создание...' : 'Создать админа'}
+            <RolePicker value={form.roleCodes} onToggle={toggleCreateRole} />
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={() => setCreateOpen(false)} className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-semibold">Отмена</button>
+              <button type="button" disabled={saving} onClick={() => void createAdmin()} className="h-10 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white disabled:opacity-50">
+                {saving ? 'Создание...' : 'Создать сотрудника'}
               </button>
             </div>
           </div>
         </Modal>
-      )}
+      ) : null}
 
-      {rolesOpen && selectedAdmin && (
-        <Modal title={`Роли: ${getAdminName(selectedAdmin)}`} onClose={() => setRolesOpen(false)}>
+      {rolesAdmin ? (
+        <Modal title={`Доступ: ${getName(rolesAdmin)}`} onClose={() => setRolesAdmin(null)}>
+          <RolePicker value={editRoleCodes} onToggle={toggleEditRole} />
+          <div className="mt-5 flex justify-end gap-2">
+            <button type="button" onClick={() => setRolesAdmin(null)} className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-semibold">Отмена</button>
+            <button type="button" disabled={saving} onClick={() => void saveRoles()} className="h-10 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white disabled:opacity-50">Сохранить</button>
+          </div>
+        </Modal>
+      ) : null}
+
+      {passwordAdmin ? (
+        <Modal title={`Пароль: ${getName(passwordAdmin)}`} onClose={() => setPasswordAdmin(null)}>
           <div className="space-y-4">
-            <RoleCheckboxes value={editRoleCodes} onToggle={toggleEditRole} />
-
-            <div className="flex justify-end gap-3 pt-3">
-              <button
-                onClick={() => setRolesOpen(false)}
-                className="h-11 rounded-xl border border-slate-200 px-5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                Отмена
-              </button>
-
-              <button
-                onClick={saveRoles}
-                disabled={saving}
-                className="h-11 rounded-xl bg-indigo-600 px-5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
-              >
-                {saving ? 'Сохранение...' : 'Сохранить роли'}
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+              Текущий пароль нельзя получить с сервера: он хранится только в виде защищённого хеша. Супер-администратор может задать новый пароль и увидеть его до закрытия страницы.
+            </div>
+            <PasswordInput
+              label="Новый пароль"
+              value={newPassword}
+              visible={newPasswordVisible}
+              onToggle={() => setNewPasswordVisible((value) => !value)}
+              onChange={setNewPassword}
+            />
+            <p className="text-xs text-slate-500">После изменения все активные сессии сотрудника будут завершены.</p>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setPasswordAdmin(null)} className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-semibold">Отмена</button>
+              <button type="button" disabled={saving} onClick={() => void resetPassword()} className="h-10 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white disabled:opacity-50">
+                {saving ? 'Изменение...' : 'Изменить пароль'}
               </button>
             </div>
           </div>
         </Modal>
-      )}
+      ) : null}
     </main>
   );
 }
 
-function StatCard({
-  icon,
-  title,
-  value,
-  tone,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  value: number;
-  tone: 'blue' | 'green' | 'orange' | 'purple' | 'indigo';
-}) {
-  const toneClass = {
-    blue: 'bg-blue-100 text-blue-600',
-    green: 'bg-emerald-100 text-emerald-600',
-    orange: 'bg-orange-100 text-orange-600',
-    purple: 'bg-purple-100 text-purple-600',
-    indigo: 'bg-indigo-100 text-indigo-600',
-  }[tone];
-
+function Stat({ title, value, icon }: { title: string; value: number; icon: React.ReactNode }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className={`mb-4 flex h-12 w-12 items-center justify-center rounded-2xl ${toneClass}`}>
-        {icon}
-      </div>
-      <div className="text-sm font-medium text-slate-500">{title}</div>
-      <div className="mt-1 text-3xl font-bold text-slate-950">{value}</div>
-      <div className="mt-3 text-xs font-semibold text-emerald-600">
-        ↗ данные обновлены
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">{title}</div>
+          <div className="mt-2 text-2xl font-bold">{value}</div>
+        </div>
+        <div className="rounded-xl bg-violet-50 p-3 text-violet-700">{icon}</div>
       </div>
     </div>
   );
 }
 
-function Modal({
-  title,
-  children,
-  onClose,
-}: {
-  title: string;
-  children: React.ReactNode;
-  onClose: () => void;
-}) {
+function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-end bg-slate-950/35 p-6">
-      <div className="h-full max-h-[860px] w-full max-w-[420px] overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-end bg-slate-950/35 p-5" onMouseDown={onClose}>
+      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
         <div className="mb-5 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-slate-950">{title}</h2>
-          <button
-            onClick={onClose}
-            className="flex h-9 w-9 items-center justify-center rounded-lg hover:bg-slate-100"
-          >
-            <X className="h-5 w-5 text-slate-500" />
-          </button>
+          <h2 className="text-lg font-bold">{title}</h2>
+          <button type="button" onClick={onClose} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100"><X className="h-5 w-5" /></button>
         </div>
-
         {children}
       </div>
     </div>
   );
 }
 
-function Input({
-  label,
-  value,
-  onChange,
-  placeholder,
-  type = 'text',
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  type?: string;
-}) {
+function Input({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-sm font-semibold text-slate-700">
-        {label}
-      </span>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="h-11 w-full rounded-xl border border-slate-200 px-4 text-sm outline-none focus:border-indigo-400"
-      />
+      <span className="mb-1.5 block text-sm font-semibold text-slate-700">{label}</span>
+      <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-violet-400" />
     </label>
   );
 }
 
-function RoleCheckboxes({
-  value,
-  onToggle,
-}: {
-  value: AdminRoleCode[];
-  onToggle: (role: AdminRoleCode) => void;
-}) {
+function PasswordInput({ label, value, visible, onToggle, onChange }: { label: string; value: string; visible: boolean; onToggle: () => void; onChange: (value: string) => void }) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-sm font-semibold text-slate-700">{label}</span>
+      <div className="relative">
+        <input type={visible ? 'text' : 'password'} value={value} onChange={(event) => onChange(event.target.value)} autoComplete="new-password" className="h-11 w-full rounded-xl border border-slate-200 px-3 pr-11 text-sm outline-none focus:border-violet-400" />
+        <button type="button" onClick={onToggle} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-2 text-slate-500 hover:bg-slate-100" aria-label={visible ? 'Скрыть пароль' : 'Показать пароль'}>
+          {visible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+        </button>
+      </div>
+    </label>
+  );
+}
+
+function RolePicker({ value, onToggle }: { value: AdminRoleCode[]; onToggle: (code: AdminRoleCode) => void }) {
   return (
     <div>
-      <div className="mb-2 text-sm font-semibold text-slate-700">Роли *</div>
-
+      <div className="mb-2 text-sm font-semibold text-slate-700">Должность и доступ *</div>
       <div className="space-y-2">
         {ROLE_OPTIONS.map((role) => (
-          <label
-            key={role.code}
-            className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 p-3 hover:bg-slate-50"
-          >
-            <input
-              type="checkbox"
-              checked={value.includes(role.code)}
-              onChange={() => onToggle(role.code)}
-              className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600"
-            />
-
+          <label key={role.code} className="flex cursor-pointer gap-3 rounded-xl border border-slate-200 p-3 hover:bg-slate-50">
+            <input type="checkbox" checked={value.includes(role.code)} onChange={() => onToggle(role.code)} className="mt-1 h-4 w-4" />
             <div>
-              <div className="text-sm font-bold text-slate-900">{role.label}</div>
-              <div className="text-xs text-slate-500">{role.description}</div>
+              <div className="text-sm font-semibold text-slate-900">{role.label}</div>
+              <div className="mt-0.5 text-xs leading-5 text-slate-500">{role.description}</div>
             </div>
           </label>
         ))}
