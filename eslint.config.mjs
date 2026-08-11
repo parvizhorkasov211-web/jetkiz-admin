@@ -1,36 +1,33 @@
 // eslint.config.mjs
-import { FlatCompat } from '@eslint/eslintrc';
+import { defineConfig, globalIgnores } from 'eslint/config';
+import nextVitals from 'eslint-config-next/core-web-vitals';
+import nextTs from 'eslint-config-next/typescript';
+import prettier from 'eslint-config-prettier/flat';
 
-// Create a FlatCompat instance to support legacy "extends" syntax.
-const compat = new FlatCompat({
-  baseDirectory: import.meta.dirname,
-});
-
-const eslintConfig = [
-  ...compat.config({
-    extends: ['next/core-web-vitals', 'next/typescript', 'prettier'],
-    // Plugins in legacy format must be an array of plugin names.
-    plugins: ['react-hooks'],
+const eslintConfig = defineConfig([
+  ...nextVitals,
+  ...nextTs,
+  prettier,
+  {
     rules: {
-      // Disable react-in-jsx-scope (not needed in React 17+)
       'react/react-in-jsx-scope': 'off',
       'react/no-unescaped-entities': 'off',
       '@typescript-eslint/no-explicit-any': 'warn',
-      // React Hooks rules
       'react-hooks/rules-of-hooks': 'error',
       'react-hooks/exhaustive-deps': 'warn',
       '@next/next/no-img-element': 'off',
     },
-  }),
-  {
-    ignores: [
-      '.next/**',
-      'node_modules/**',
-      'prisma/**',
-      'app/**/*.js',
-      'app/**/*.js.map',
-    ],
   },
-];
+  globalIgnores([
+    '.next/**',
+    'out/**',
+    'build/**',
+    'node_modules/**',
+    'prisma/**',
+    'next-env.d.ts',
+    'app/**/*.js',
+    'app/**/*.js.map',
+  ]),
+]);
 
 export default eslintConfig;
