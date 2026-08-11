@@ -1,1 +1,1 @@
-export { default } from "@/components/home/HomeCmsEditor";
+export { default } from "@/components/dashboard/AdminDashboardView";
