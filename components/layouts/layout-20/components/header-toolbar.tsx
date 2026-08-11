@@ -2,7 +2,6 @@
 
 import { ClipboardList, Plus } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
-import * as XLSX from "xlsx";
 
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/api";
@@ -42,6 +41,8 @@ type ExportRestaurant = {
   commissionPct?: number | null;
 };
 
+type CsvValue = string | number | null | undefined;
+
 function normalizeCollection<T>(data: ApiCollectionResponse<T>): T[] {
   if (Array.isArray(data)) {
     return data;
@@ -71,6 +72,32 @@ function buildCourierName(courier: ExportCourier): string {
     .join(" ");
 }
 
+function csvCell(value: CsvValue): string {
+  const text = String(value ?? "");
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function downloadCsv(
+  filename: string,
+  headers: string[],
+  rows: CsvValue[][],
+): void {
+  const csv = [headers, ...rows]
+    .map((row) => row.map(csvCell).join(";"))
+    .join("\r\n");
+  const blob = new Blob(["\uFEFF", csv], {
+    type: "text/csv;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function HeaderToolbar() {
   const { isMobile } = useLayout();
   const router = useRouter();
@@ -97,44 +124,54 @@ export function HeaderToolbar() {
     const data = (await apiFetch("/couriers")) as ApiCollectionResponse<ExportCourier>;
     const couriers = normalizeCollection(data);
 
-    const rows = couriers.map((courier) => ({
-      ID: courier.id ?? "",
-      "Имя/Фамилия": buildCourierName(courier),
-      Телефон: courier.phone ?? courier.user?.phone ?? "",
-      ИНН: courier.iin ?? "",
-      Статус: courier.status ?? "",
-      "Комиссия override (%)":
+    downloadCsv(
+      "couriers.csv",
+      [
+        "ID",
+        "Имя/Фамилия",
+        "Телефон",
+        "ИИН",
+        "Статус",
+        "Комиссия override (%)",
+      ],
+      couriers.map((courier) => [
+        courier.id ?? "",
+        buildCourierName(courier),
+        courier.phone ?? courier.user?.phone ?? "",
+        courier.iin ?? "",
+        courier.status ?? "",
         courier.courierCommissionPctOverride ??
-        courier.courierProfile?.courierCommissionPctOverride ??
-        "",
-    }));
-
-    const worksheet = XLSX.utils.json_to_sheet(rows);
-    const workbook = XLSX.utils.book_new();
-
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Couriers");
-    XLSX.writeFile(workbook, "couriers.xlsx");
+          courier.courierProfile?.courierCommissionPctOverride ??
+          "",
+      ]),
+    );
   };
 
   const exportRestaurants = async () => {
     const data = (await apiFetch("/restaurants")) as ApiCollectionResponse<ExportRestaurant>;
     const restaurants = normalizeCollection(data);
 
-    const rows = restaurants.map((restaurant) => ({
-      ID: restaurant.id ?? "",
-      "Название (RU)": restaurant.nameRu ?? "",
-      "Название (KZ)": restaurant.nameKk ?? "",
-      Статус: restaurant.status ?? "",
-      Адрес: restaurant.address ?? "",
-      Телефон: restaurant.phone ?? "",
-      Комиссия: restaurant.commissionPct ?? "",
-    }));
-
-    const worksheet = XLSX.utils.json_to_sheet(rows);
-    const workbook = XLSX.utils.book_new();
-
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Restaurants");
-    XLSX.writeFile(workbook, "restaurants.xlsx");
+    downloadCsv(
+      "restaurants.csv",
+      [
+        "ID",
+        "Название (RU)",
+        "Название (KZ)",
+        "Статус",
+        "Адрес",
+        "Телефон",
+        "Комиссия",
+      ],
+      restaurants.map((restaurant) => [
+        restaurant.id ?? "",
+        restaurant.nameRu ?? "",
+        restaurant.nameKk ?? "",
+        restaurant.status ?? "",
+        restaurant.address ?? "",
+        restaurant.phone ?? "",
+        restaurant.commissionPct ?? "",
+      ]),
+    );
   };
 
   const handleReportsClick = async () => {
