@@ -14,6 +14,7 @@ import {
   ShoppingBag,
   Tag,
   TrendingUp,
+  UserCog,
   Users,
   UtensilsCrossed,
   Wallet,
@@ -44,14 +45,14 @@ export const MENU_SIDEBAR_MAIN: MenuConfig = [
   {
     title: "Аналитика",
     children: [
-      { title: "Метрики курьеров", path: `${L20}/couriers/metrics`, icon: BarChart3 },
-      { title: "Метрики ресторанов", path: `${L20}/restaurants/analytics`, icon: TrendingUp },
-      { title: "Аналитика товаров", path: `${L20}/restaurants/analytics/products`, icon: UtensilsCrossed },
+      { title: "Работа курьеров", path: `${L20}/couriers/metrics`, icon: BarChart3 },
+      { title: "Работа ресторанов", path: `${L20}/restaurants/analytics`, icon: TrendingUp },
+      { title: "Продажи товаров", path: `${L20}/restaurants/analytics/products`, icon: UtensilsCrossed },
       { title: "Качество ресторанов", path: `${L20}/restaurants/analytics/quality`, icon: FileCheck },
       { title: "Финансы ресторанов", path: `${L20}/restaurants/analytics/finance`, icon: Wallet },
-      { title: "Метрики клиентов", path: `${L20}/clients/metrics`, icon: Users },
+      { title: "Активность клиентов", path: `${L20}/clients/metrics`, icon: Users },
       { title: "Поиск и избранное", path: `${L20}/clients/search-favorites`, icon: Search },
-      { title: "Финансы", path: `${L20}/analytics`, icon: Wallet },
+      { title: "Финансы JETKIZ", path: `${L20}/analytics`, icon: Wallet },
     ],
   },
   {
@@ -66,7 +67,8 @@ export const MENU_SIDEBAR_MAIN: MenuConfig = [
   {
     title: "Управление",
     children: [
-      { title: "Администраторы", path: `${L20}/admins`, icon: Shield },
+      { title: "Сотрудники и доступ", path: `${L20}/admins`, icon: UserCog },
+      { title: "Роли и права", path: `${L20}/roles`, icon: Shield },
       { title: "Настройки", path: `${L20}/settings`, icon: Settings },
       { title: "Журнал действий", path: `${L20}/audit`, icon: FileCheck },
     ],
