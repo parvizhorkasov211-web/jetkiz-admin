@@ -33,21 +33,25 @@ function asNumber(value: unknown, fallback = 0): number {
   return fallback;
 }
 
+function asNullableNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = asNumber(value, Number.NaN);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function asBoolean(value: unknown, fallback = false): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 function asObject(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {};
 }
 
 export function toItemsArray<T>(value: unknown): T[] {
-  if (Array.isArray(value)) {
-    return value as T[];
-  }
-
-  if (!isRecord(value)) {
-    return [];
-  }
+  if (Array.isArray(value)) return value as T[];
+  if (!isRecord(value)) return [];
 
   const possibleKeys = ["items", "data", "restaurants", "products", "result"];
-
   for (const key of possibleKeys) {
     const item = value[key];
     if (Array.isArray(item)) return item as T[];
@@ -60,6 +64,7 @@ export function mapOverview(value: unknown): RestaurantAnalyticsOverview {
   const data = asObject(value);
   const conversion = asObject(data.conversion);
   const quality = asObject(data.quality);
+  const analyticsQuality = asObject(data.analyticsQuality);
   const period = asObject(data.period);
 
   return {
@@ -69,9 +74,7 @@ export function mapOverview(value: unknown): RestaurantAnalyticsOverview {
       end: asString(period.end),
     },
 
-    restaurantsCount: asNumber(
-      data.restaurantsCount ?? data.activeRestaurants,
-    ),
+    restaurantsCount: asNumber(data.restaurantsCount ?? data.activeRestaurants),
     productsCount: asNumber(data.productsCount),
 
     ordersCount: asNumber(data.ordersCount ?? data.totalOrders),
@@ -88,12 +91,18 @@ export function mapOverview(value: unknown): RestaurantAnalyticsOverview {
     productViews: asNumber(data.productViews),
     addToCartEvents: asNumber(data.addToCartEvents),
     checkoutStarts: asNumber(data.checkoutStarts),
+    orderCreatedEvents: asNumber(data.orderCreatedEvents),
+
+    analyticsQuality: {
+      orderEventCoveragePct: asNumber(analyticsQuality.orderEventCoveragePct),
+      orderFunnelTrusted: asBoolean(analyticsQuality.orderFunnelTrusted),
+    },
 
     conversion: {
       viewToCart: asNumber(conversion.viewToCart),
       cartToCheckout: asNumber(conversion.cartToCheckout),
-      checkoutToOrder: asNumber(conversion.checkoutToOrder),
-      restaurantViewToOrder: asNumber(conversion.restaurantViewToOrder),
+      checkoutToOrder: asNullableNumber(conversion.checkoutToOrder),
+      restaurantViewToOrder: asNullableNumber(conversion.restaurantViewToOrder),
     },
 
     quality: {
@@ -133,8 +142,10 @@ export function mapTopRestaurant(
     productViews: asNumber(data.productViews),
     addToCart: asNumber(data.addToCart),
     orderCreatedEvents: asNumber(data.orderCreatedEvents),
+    orderEventCoveragePct: asNumber(data.orderEventCoveragePct),
+    conversionTrusted: asBoolean(data.conversionTrusted),
 
-    conversionRate: asNumber(data.conversionRate),
+    conversionRate: asNullableNumber(data.conversionRate),
 
     readyCount: asNumber(data.readyCount),
     readyOnTimeCount: asNumber(data.readyOnTimeCount),
@@ -157,6 +168,7 @@ export function mapTopProduct(value: unknown): RestaurantAnalyticsTopProduct {
     imageUrl: asNullableString(data.imageUrl),
 
     price: asNumber(data.price),
+    isAvailable: asBoolean(data.isAvailable),
 
     orderedQuantity: asNumber(data.orderedQuantity),
     ordersCount: asNumber(data.ordersCount ?? data.orders),
@@ -168,7 +180,7 @@ export function mapTopProduct(value: unknown): RestaurantAnalyticsTopProduct {
     removeFromCart: asNumber(data.removeFromCart),
 
     viewToCartRate: asNumber(data.viewToCartRate),
-    cartToOrderRate: asNumber(data.cartToOrderRate),
+    cartToOrderRate: null,
   };
 }
 
@@ -216,15 +228,18 @@ export function formatMoney(value: number): string {
   return `${Number(value ?? 0).toLocaleString("ru-RU")} ₸`;
 }
 
-export function formatPercent(value: number): string {
-  return `${Number(value ?? 0).toLocaleString("ru-RU", {
+export function formatPercent(value: number | null): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "Нет данных";
+  }
+
+  return `${Number(value).toLocaleString("ru-RU", {
     maximumFractionDigits: 1,
   })}%`;
 }
 
 export function formatMinutes(value: number): string {
   const normalized = Number(value ?? 0);
-
   if (normalized <= 0) return "0 мин";
 
   return `${normalized.toLocaleString("ru-RU", {
@@ -235,13 +250,17 @@ export function formatMinutes(value: number): string {
 export function getAverageReadyOnTimeRate(
   restaurants: RestaurantAnalyticsTopRestaurant[],
 ): number {
-  const values = restaurants
-    .map((restaurant) => restaurant.readyOnTimeRate)
-    .filter((value) => Number.isFinite(value) && value > 0);
+  const numerator = restaurants.reduce(
+    (sum, restaurant) => sum + restaurant.readyOnTimeCount,
+    0,
+  );
+  const denominator = restaurants.reduce(
+    (sum, restaurant) => sum + restaurant.readyCount,
+    0,
+  );
 
-  if (values.length === 0) return 0;
-
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
+  if (denominator <= 0) return 0;
+  return (numerator / denominator) * 100;
 }
 
 export function mergeProblemRestaurants(
@@ -260,7 +279,7 @@ export function mergeProblemRestaurants(
       restaurant.lateReadyCount > 0 ||
       restaurant.canceledCount > 0 ||
       restaurant.badReviewsCount > 0 ||
-      (restaurant.readyOnTimeRate > 0 && restaurant.readyOnTimeRate < 80) ||
+      (restaurant.readyCount > 0 && restaurant.readyOnTimeRate < 80) ||
       restaurant.avgPrepMinutes >= 30
     );
   });
