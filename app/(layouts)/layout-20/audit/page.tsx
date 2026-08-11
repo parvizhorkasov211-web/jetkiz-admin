@@ -1,5 +1,5 @@
-import { AdminAuditView } from "@/components/ui/widgets/admin-audit/AdminAuditView";
+import { AdminAuditProductionView } from "@/components/ui/widgets/admin-audit/AdminAuditProductionView";
 
 export default function AuditPage() {
-  return <AdminAuditView />;
+  return <AdminAuditProductionView />;
 }
