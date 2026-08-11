@@ -3,29 +3,36 @@ import { defineConfig, globalIgnores } from 'eslint/config';
 import nextVitals from 'eslint-config-next/core-web-vitals';
 import nextTs from 'eslint-config-next/typescript';
 import prettier from 'eslint-config-prettier/flat';
-import reactHooks from 'eslint-plugin-react-hooks';
+
+const nextVitalsWithLegacyUiWarnings = nextVitals.map((config) => {
+  if (!config.plugins?.['react-hooks']) {
+    return config;
+  }
+
+  return {
+    ...config,
+    rules: {
+      ...config.rules,
+      // Next 16 / React 19 enables additional React Hooks correctness rules.
+      // Legacy UI-kit components predate these rules. Keep findings visible,
+      // but do not make them release blockers while production build is green.
+      'react-hooks/set-state-in-effect': 'warn',
+      'react-hooks/purity': 'warn',
+      'react-hooks/refs': 'warn',
+    },
+  };
+});
 
 const eslintConfig = defineConfig([
-  ...nextVitals,
+  ...nextVitalsWithLegacyUiWarnings,
   ...nextTs,
   prettier,
   {
-    plugins: {
-      'react-hooks': reactHooks,
-    },
     rules: {
       'react/react-in-jsx-scope': 'off',
       'react/no-unescaped-entities': 'off',
       '@typescript-eslint/no-explicit-any': 'warn',
       '@next/next/no-img-element': 'off',
-
-      // Next 16 / React 19 enables additional React Hooks correctness rules.
-      // The project contains a large number of legacy UI-kit components that
-      // predate these rules. Keep them visible during cleanup, but do not make
-      // them release blockers while TypeScript and production build stay green.
-      'react-hooks/set-state-in-effect': 'warn',
-      'react-hooks/purity': 'warn',
-      'react-hooks/refs': 'warn',
     },
   },
   globalIgnores([
