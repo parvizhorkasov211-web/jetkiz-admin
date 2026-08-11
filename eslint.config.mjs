@@ -14,6 +14,14 @@ const eslintConfig = defineConfig([
       'react/no-unescaped-entities': 'off',
       '@typescript-eslint/no-explicit-any': 'warn',
       '@next/next/no-img-element': 'off',
+
+      // Next 16 / React 19 enables additional React Hooks correctness rules.
+      // The project contains a large number of legacy UI-kit components that
+      // predate these rules. Keep them visible during cleanup, but do not make
+      // them release blockers while TypeScript and production build stay green.
+      'react-hooks/set-state-in-effect': 'warn',
+      'react-hooks/purity': 'warn',
+      'react-hooks/refs': 'warn',
     },
   },
   globalIgnores([
