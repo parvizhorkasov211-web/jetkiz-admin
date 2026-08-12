@@ -2,7 +2,22 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { MENU_SIDEBAR_MAIN } from "@/config/layout-20.config";
+import { getSession } from "@/lib/auth";
+
+type AdminLike = {
+  isSuperAdmin?: boolean;
+  role?: string;
+  roleCode?: string;
+  primaryRole?: string;
+  primaryRoleCode?: string;
+  roleCodes?: string[];
+  activeRoleCodes?: string[];
+  roles?: unknown[];
+  permissionCodes?: string[];
+  permissions?: unknown[];
+} | null;
 
 const EXACT_PATHS = new Set([
   "/layout-20",
@@ -19,8 +34,69 @@ function isActivePath(pathname: string, path?: string) {
   return pathname === path || pathname.startsWith(`${path}/`);
 }
 
+function list(value: unknown): string[] {
+  if (typeof value === "string") {
+    return value ? [value] : [];
+  }
+
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (typeof item === "string") return item;
+      if (item && typeof item === "object") {
+        const record = item as Record<string, unknown>;
+        return record.code ?? record.name ?? "";
+      }
+      return item;
+    })
+    .map(String)
+    .filter(Boolean);
+}
+
+function hasPermission(admin: AdminLike, permission: string): boolean {
+  const roles = [
+    ...list(admin?.role),
+    ...list(admin?.roleCode),
+    ...list(admin?.primaryRole),
+    ...list(admin?.primaryRoleCode),
+    ...list(admin?.roleCodes),
+    ...list(admin?.activeRoleCodes),
+    ...list(admin?.roles),
+  ];
+  const permissions = [
+    ...list(admin?.permissionCodes),
+    ...list(admin?.permissions),
+  ];
+
+  return (
+    admin?.isSuperAdmin === true ||
+    roles.includes("SUPER_ADMIN") ||
+    permissions.includes("admin.full_access") ||
+    permissions.includes(permission)
+  );
+}
+
 export function SidebarPrimaryMenu() {
   const pathname = usePathname();
+  const [admin, setAdmin] = useState<AdminLike>(null);
+
+  useEffect(() => {
+    void getSession().then((session) => setAdmin(session.admin));
+  }, []);
+
+  const sections = useMemo(
+    () =>
+      MENU_SIDEBAR_MAIN.map((section) => ({
+        ...section,
+        children: section.children?.filter(
+          (item) => !item.permission || hasPermission(admin, item.permission),
+        ),
+      })).filter((section) => !section.children || section.children.length > 0),
+    [admin],
+  );
 
   return (
     <nav
@@ -29,7 +105,7 @@ export function SidebarPrimaryMenu() {
         padding: "0 12px",
       }}
     >
-      {MENU_SIDEBAR_MAIN.map((section, sectionIndex) => (
+      {sections.map((section, sectionIndex) => (
         <div
           key={`${section.title ?? "main"}-${sectionIndex}`}
           style={{

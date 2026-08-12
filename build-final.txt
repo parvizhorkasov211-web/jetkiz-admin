@@ -1,0 +1,39 @@
+
+> metronic-react-starter-kit@9.4.4 build
+> next build
+
+▲ Next.js 16.3.0 (Turbopack)
+✓ Running next.config.mjs took 30ms
+
+  Creating an optimized production build ...
+
+> Build error occurred
+Error: Turbopack build failed with 1 error:
+./components/couriers/CouriersProductionV2Page.tsx:20:1
+Error: Module not found: Can't resolve 'xlsx'
+  [90m18 |[0m } [36mfrom[0m [32m"lucide-react"[0m;
+  [90m19 |[0m [36mimport[0m { useRouter } [36mfrom[0m [32m"next/navigation"[0m;
+[31m[1m>[0m [90m20 |[0m [36mimport[0m * [36mas[0m [33mXLSX[0m [36mfrom[0m [32m"xlsx"[0m;
+  [90m   |[0m [31m[1m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  [90m21 |[0m
+  [90m22 |[0m [36mimport[0m { apiFetch } [36mfrom[0m [32m"@/lib/api"[0m;
+  [90m23 |[0m [36mimport[0m { getSession } [36mfrom[0m [32m"@/lib/auth"[0m;
+
+
+
+Import traces:
+  Client Component Browser:
+    ./components/couriers/CouriersProductionV2Page.tsx [Client Component Browser]
+    ./app/(layouts)/layout-20/couriers/page.tsx [Client Component Browser]
+    ./app/(layouts)/layout-20/couriers/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./components/couriers/CouriersProductionV2Page.tsx [Client Component SSR]
+    ./app/(layouts)/layout-20/couriers/page.tsx [Client Component SSR]
+    ./app/(layouts)/layout-20/couriers/page.tsx [Server Component]
+
+https://nextjs.org/docs/messages/module-not-found
+
+
+    at <unknown> (./components/couriers/CouriersProductionV2Page.tsx:20:1)
+    at <unknown> (https://nextjs.org/docs/messages/module-not-found)

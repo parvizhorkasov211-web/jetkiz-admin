@@ -168,7 +168,7 @@ export function RestaurantProductAnalyticsDrawer({ product, onClose }: Props) {
               <FunnelRow
                 title="Заказы"
                 value={product.ordersCount}
-                percent={product.cartToOrderRate}
+                percent={product.cartToOrderRate ?? 0}
               />
             </div>
           </div>

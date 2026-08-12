@@ -3,11 +3,11 @@
 import { ClipboardList, Plus } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import * as XLSX from "xlsx";
 
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/api";
 import { getSession } from "@/lib/auth";
+import { downloadCsv, type CsvColumn } from "@/lib/csv-export";
 import { useLayout } from "./context";
 
 type ApiCollectionResponse<T> =
@@ -110,6 +110,33 @@ function buildCourierName(courier: ExportCourier): string {
     .join(" ");
 }
 
+const courierExportColumns: CsvColumn<ExportCourier>[] = [
+  { header: "Номер курьера", value: (courier) => courier.number ?? "" },
+  { header: "Имя/Фамилия", value: buildCourierName },
+  {
+    header: "Телефон",
+    value: (courier) => courier.phone ?? courier.user?.phone ?? "",
+  },
+  { header: "ИИН", value: (courier) => courier.iin ?? "" },
+  { header: "Статус", value: (courier) => courier.status ?? "" },
+  {
+    header: "Комиссия override (%)",
+    value: (courier) =>
+      courier.courierCommissionPctOverride ??
+      courier.courierProfile?.courierCommissionPctOverride ??
+      "",
+  },
+];
+
+const restaurantExportColumns: CsvColumn<ExportRestaurant>[] = [
+  { header: "ID", value: (restaurant) => restaurant.id ?? "" },
+  { header: "Название (RU)", value: (restaurant) => restaurant.nameRu ?? "" },
+  { header: "Название (KZ)", value: (restaurant) => restaurant.nameKk ?? "" },
+  { header: "Статус", value: (restaurant) => restaurant.status ?? "" },
+  { header: "Адрес", value: (restaurant) => restaurant.address ?? "" },
+  { header: "Телефон", value: (restaurant) => restaurant.phone ?? "" },
+  { header: "Комиссия", value: (restaurant) => restaurant.commissionPct ?? "" },
+];
 export function HeaderToolbar() {
   const { isMobile } = useLayout();
   const router = useRouter();
@@ -148,44 +175,14 @@ export function HeaderToolbar() {
     const data = (await apiFetch("/couriers/export")) as ApiCollectionResponse<ExportCourier>;
     const couriers = normalizeCollection(data);
 
-    const rows = couriers.map((courier) => ({
-      "Номер курьера": courier.number ?? "",
-      "Имя/Фамилия": buildCourierName(courier),
-      Телефон: courier.phone ?? courier.user?.phone ?? "",
-      ИИН: courier.iin ?? "",
-      Статус: courier.status ?? "",
-      "Комиссия override (%)":
-        courier.courierCommissionPctOverride ??
-        courier.courierProfile?.courierCommissionPctOverride ??
-        "",
-    }));
-
-    const worksheet = XLSX.utils.json_to_sheet(rows);
-    const workbook = XLSX.utils.book_new();
-
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Couriers");
-    XLSX.writeFile(workbook, "couriers.xlsx");
+    downloadCsv("couriers", couriers, courierExportColumns);
   };
 
   const exportRestaurants = async () => {
     const data = (await apiFetch("/restaurants")) as ApiCollectionResponse<ExportRestaurant>;
     const restaurants = normalizeCollection(data);
 
-    const rows = restaurants.map((restaurant) => ({
-      ID: restaurant.id ?? "",
-      "Название (RU)": restaurant.nameRu ?? "",
-      "Название (KZ)": restaurant.nameKk ?? "",
-      Статус: restaurant.status ?? "",
-      Адрес: restaurant.address ?? "",
-      Телефон: restaurant.phone ?? "",
-      Комиссия: restaurant.commissionPct ?? "",
-    }));
-
-    const worksheet = XLSX.utils.json_to_sheet(rows);
-    const workbook = XLSX.utils.book_new();
-
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Restaurants");
-    XLSX.writeFile(workbook, "restaurants.xlsx");
+    downloadCsv("restaurants", restaurants, restaurantExportColumns);
   };
 
   const handleReportsClick = async () => {
@@ -225,7 +222,7 @@ export function HeaderToolbar() {
           className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-white hover:bg-green-700"
         >
           <ClipboardList size={18} />
-          {!isMobile ? <span>Выгрузить в Excel</span> : null}
+          {!isMobile ? <span>Выгрузить в CSV</span> : null}
         </button>
       ) : null}
 

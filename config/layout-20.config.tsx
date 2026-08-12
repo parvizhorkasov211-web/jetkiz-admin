@@ -10,7 +10,6 @@ import {
   MessageSquare,
   Search,
   Settings,
-  Shield,
   ShoppingBag,
   Tag,
   TrendingUp,
@@ -56,21 +55,25 @@ export const MENU_SIDEBAR_MAIN: MenuConfig = [
     ],
   },
   {
+    title: "Управление",
+    children: [
+      {
+        title: "Сотрудники и доступ",
+        path: `${L20}/admins`,
+        icon: UserCog,
+        permission: "admins.read",
+      },
+      { title: "Настройки", path: `${L20}/settings`, icon: Settings },
+      { title: "Журнал действий", path: `${L20}/audit`, icon: FileCheck },
+    ],
+  },
+  {
     title: "Контент",
     children: [
       { title: "Главная приложения", path: `${L20}/content/home`, icon: Home },
       { title: "Промокоды", path: `${L20}/promocodes`, icon: Tag },
       { title: "Отзывы", path: `${L20}/reviews`, icon: MessageSquare },
       { title: "Уведомления", path: `${L20}/notifications`, icon: Bell },
-    ],
-  },
-  {
-    title: "Управление",
-    children: [
-      { title: "Сотрудники и доступ", path: `${L20}/admins`, icon: UserCog },
-      { title: "Роли и права", path: `${L20}/roles`, icon: Shield },
-      { title: "Настройки", path: `${L20}/settings`, icon: Settings },
-      { title: "Журнал действий", path: `${L20}/audit`, icon: FileCheck },
     ],
   },
 ];

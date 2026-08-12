@@ -17,10 +17,10 @@ import {
   X,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import * as XLSX from "xlsx";
 
 import { apiFetch } from "@/lib/api";
 import { getSession } from "@/lib/auth";
+import { downloadCsv, type CsvColumn } from "@/lib/csv-export";
 
 type CourierStatus = "BLOCKED" | "BUSY" | "ONLINE_IDLE" | "OFFLINE";
 
@@ -228,25 +228,34 @@ function buildExportQuery(params: {
   return `/couriers/export?${query.toString()}`;
 }
 
-function exportToXlsx(response: ExportResponse) {
-  const rows = (response.items ?? []).map((courier) => ({
-    "Номер курьера": courier.number ?? "",
-    Курьер: formatName(courier),
-    Телефон: courier.phone ?? "",
-    ИИН: courier.iin ?? "",
-    Адрес: courier.addressText ?? "",
-    Статус: getStatus(courier).label,
-    "Активных заказов": courier.activeOrdersCount ?? 0,
-    "Фиксированное начисление": courier.personalFeeOverride ?? "",
-    "Бонус к выплате": courier.payoutBonusAdd ?? "",
-    "Комиссия JETKIZ (%)": courier.courierCommissionPctOverride ?? "",
-    "Последняя связь": courier.lastSeenAt ?? "",
-  }));
+const courierExportColumns: CsvColumn<Courier>[] = [
+  { header: "Номер курьера", value: (courier) => courier.number ?? "" },
+  { header: "Курьер", value: formatName },
+  { header: "Телефон", value: (courier) => courier.phone ?? "" },
+  { header: "ИИН", value: (courier) => courier.iin ?? "" },
+  { header: "Адрес", value: (courier) => courier.addressText ?? "" },
+  { header: "Статус", value: (courier) => getStatus(courier).label },
+  {
+    header: "Активных заказов",
+    value: (courier) => courier.activeOrdersCount ?? 0,
+  },
+  {
+    header: "Фиксированное начисление",
+    value: (courier) => courier.personalFeeOverride ?? "",
+  },
+  {
+    header: "Бонус к выплате",
+    value: (courier) => courier.payoutBonusAdd ?? "",
+  },
+  {
+    header: "Комиссия JETKIZ (%)",
+    value: (courier) => courier.courierCommissionPctOverride ?? "",
+  },
+  { header: "Последняя связь", value: (courier) => courier.lastSeenAt ?? "" },
+];
 
-  const worksheet = XLSX.utils.json_to_sheet(rows);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Couriers");
-  XLSX.writeFile(workbook, "jetkiz-couriers.xlsx");
+function exportToCsv(response: ExportResponse) {
+  downloadCsv("couriers", response.items ?? [], courierExportColumns);
 }
 
 export function CouriersProductionV2Page() {
@@ -312,7 +321,7 @@ export function CouriersProductionV2Page() {
       const response = await apiFetch<ExportResponse>(
         buildExportQuery({ q, online, blocked, busy }),
       );
-      exportToXlsx(response);
+      exportToCsv(response);
       setExportDialog(false);
     } catch (err) {
       setError(
